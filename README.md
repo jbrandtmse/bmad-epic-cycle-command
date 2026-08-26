@@ -3,6 +3,9 @@
 > [!NOTE]
 > **Tested with [Claude Code](https://claude.com/claude-code) only.** These kits are written as prompts for an agentic coding assistant to execute, and the installed command relies on Claude Code specifics (slash commands, the `Skill`/`Agent` tools, subagent model parameters, permission modes). Other coding agents are untested.
 
+> [!IMPORTANT]
+> **Compatible with BMAD Method v6.10.0 or earlier.** BMAD [v6.11.0](https://github.com/bmad-code-org/BMAD-METHOD/releases) introduced breaking changes that these kits do not yet account for; support for v6.11.0+ will be refactored into the project soon. Until then, install against a v6.10.0 (or earlier) BMAD project.
+
 Three self-contained installation kits that add an autonomous, multi-agent epic development pipeline — the `/epic-cycle` slash command — to any [BMAD Method](https://github.com/bmad-code-org/BMAD-METHOD) v6 project running under [Claude Code](https://claude.com/claude-code).
 
 These are not shell scripts. Each document is a **prompt-as-installer**: you point a Claude Code session at it, and the session reads the steps, performs the file operations (with detection, backups, and grep-guarded idempotent patches), and verifies the result. All three kits are safe to re-run.
@@ -43,7 +46,7 @@ It patches the base kit's command at exact anchors (six grep-guarded edits), app
 ### Prerequisites
 
 - [Claude Code](https://claude.com/claude-code)
-- A BMAD Method v6 project: `npx bmad-method install` (modules `core,bmm`, IDE `claude-code`)
+- A BMAD Method v6 project: `npx bmad-method install` (modules `core,bmm`, IDE `claude-code`) — **v6.10.0 or earlier** (see the compatibility note above; v6.11.0+ is not yet supported)
 
 ### Install order
 
