@@ -1,0 +1,6 @@
+# BMAD install/output directories (created when running the kits in this repo)
+_bmad/
+_bmad-output/
+
+# Claude Code project config / BMAD-installed skills
+.claude/
