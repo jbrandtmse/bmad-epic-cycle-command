@@ -1,0 +1,383 @@
+<title>Epic-Cycle Field Report</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:ital,wght@0,400;0,600;1,400&display=swap">
+<style>
+/* Layout: one reading column, a summary panel up top, then grouped findings, each with a value chip and its evidence */
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --fg: #1b2230;
+  --muted: #5a6475;
+  --rule: #dde1e8;
+  --accent: #2552a3;
+  --accent-soft: #e6edf9;
+  --high: #9a4d00;
+  --high-bg: #fdf0e1;
+  --med: #2552a3;
+  --med-bg: #e6edf9;
+  --low: #4d5666;
+  --low-bg: #eceff3;
+  --code-bg: #eef1f5;
+  --display: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+  --body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12161d; --surface: #1a1f28; --fg: #e3e7ee; --muted: #9aa4b5; --rule: #2c3340;
+    --accent: #8fb0ff; --accent-soft: #1f2a40;
+    --high: #f0b26b; --high-bg: #3a2a17; --med: #8fb0ff; --med-bg: #1f2a40; --low: #b4bccb; --low-bg: #262c37;
+    --code-bg: #232a35; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #12161d; --surface: #1a1f28; --fg: #e3e7ee; --muted: #9aa4b5; --rule: #2c3340;
+  --accent: #8fb0ff; --accent-soft: #1f2a40;
+  --high: #f0b26b; --high-bg: #3a2a17; --med: #8fb0ff; --med-bg: #1f2a40; --low: #b4bccb; --low-bg: #262c37;
+  --code-bg: #232a35; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--fg);
+  font: 16px/1.6 var(--body);
+  padding-inline: 16px; padding-block: 40px 72px;
+}
+main { max-width: 760px; margin: 0 auto; display: grid; gap: 40px; }
+h1, h2, h3 { font-family: var(--display); text-wrap: balance; margin: 0; line-height: 1.2; }
+h1 { font-size: 2.1rem; font-weight: 600; letter-spacing: -0.01em; }
+h2 { font-size: 1.45rem; font-weight: 600; padding-bottom: 8px; border-bottom: 2px solid var(--fg); }
+h3 { font-size: 1.12rem; font-weight: 600; }
+p { margin: 0; }
+code { font-family: var(--mono); font-size: 0.86em; background: var(--code-bg); padding: 1px 5px; border-radius: 3px; overflow-wrap: anywhere; }
+a { color: var(--accent); }
+.eyebrow { font-family: var(--mono); font-size: 0.78rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+header { display: grid; gap: 12px; }
+.lede { color: var(--muted); max-width: 65ch; }
+.facts { display: flex; flex-wrap: wrap; gap: 8px 24px; font-family: var(--mono); font-size: 0.82rem; color: var(--muted); }
+.facts b { color: var(--fg); font-weight: 500; }
+.summary { background: var(--surface); border: 1px solid var(--rule); border-left: 4px solid var(--accent); border-radius: 6px; padding: 20px 22px; display: grid; gap: 12px; }
+.summary ol { margin: 0; padding-left: 1.3em; display: grid; gap: 8px; }
+.summary li::marker { font-family: var(--mono); color: var(--accent); }
+section { display: grid; gap: 18px; }
+section > p.intro { color: var(--muted); max-width: 65ch; }
+article { background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 18px 20px; display: grid; gap: 10px; min-width: 0; }
+.head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; }
+.head h3 { flex: 1 1 260px; }
+.chip { font-family: var(--mono); font-size: 0.72rem; font-weight: 500; letter-spacing: 0.05em; text-transform: uppercase; padding: 2px 8px; border-radius: 10px; white-space: nowrap; }
+.chip.high { color: var(--high); background: var(--high-bg); }
+.chip.med { color: var(--med); background: var(--med-bg); }
+.chip.low { color: var(--low); background: var(--low-bg); }
+.row { display: grid; grid-template-columns: 7.5em 1fr; gap: 4px 12px; }
+.row .k { font-family: var(--mono); font-size: 0.74rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); padding-top: 3px; }
+.row .v { min-width: 0; }
+.src { font-size: 0.84rem; color: var(--muted); }
+@media (max-width: 520px) {
+  .row { grid-template-columns: 1fr; }
+  h1 { font-size: 1.7rem; }
+}
+footer { color: var(--muted); font-size: 0.88rem; border-top: 1px solid var(--rule); padding-top: 16px; }
+</style>
+
+<main>
+<header>
+  <span class="eyebrow">Field report · /epic-cycle kit</span>
+  <h1>Epic-Cycle Field Report: OcuPilot</h1>
+  <p class="lede">What one long parallel run taught about the kit, with the change each lesson suggests. Most of these are rules the project already wrote and tested locally, so the text is ready to lift.</p>
+  <div class="facts">
+    <span>Run <b>2026-09-08 → 10-10</b></span>
+    <span>Stories done <b>239</b></span>
+    <span>Epics done <b>17</b></span>
+    <span>Releases cut <b>12</b></span>
+    <span>Installed kit <b>2026-09-13.1</b> (base + parallel)</span>
+    <span>Kit head <b>2026-10-08.2</b></span>
+  </div>
+</header>
+
+<div class="summary">
+  <span class="eyebrow">Top six, in priority order</span>
+  <ol>
+    <li><b>Ship “read once” as a base rule.</b> It is the largest token saving the run found.</li>
+    <li><b>Split the kit into one skill per agent role,</b> and give each stage only its own rules. Today every orchestrator, runner and lead loads a 237 KB command.</li>
+    <li><b>Make compile and test targets first-class.</b> Parallel runners on a stateful runtime each need their own dev instance and throwaway, with named routing and no default target.</li>
+    <li><b>Ship the fresh-instance test check.</b> It ended routine first-run CI failures on stories' own tests.</li>
+    <li><b>Support merging at story boundaries.</b> Weekly releases can't wait for a 30-story epic to close.</li>
+    <li><b>Let project additions survive a re-render.</b> Without it, projects stop taking kit updates; OcuPilot is three versions behind.</li>
+  </ol>
+</div>
+
+<section>
+  <h2>1 · Project rules worth moving into the kit</h2>
+  <p class="intro">OcuPilot added these to <code>_bmad/custom/skill-rules.md</code> (Rules 21 to 31) after measuring a cost. Each ran for weeks across Opus, Sonnet and Haiku stages.</p>
+
+  <article>
+    <div class="head"><h3>Read once, then work from what you hold</h3><span class="chip high">High value</span></div>
+    <div class="row"><span class="k">Seen</span><span class="v">In 36 hours of transcripts, the architecture spine was read 140 times. A single review re-read its own diff 30 to 57 times, and the rules file was read 31 times. A stage's context grew from about 57K tokens at spawn to 350K–450K.</span></div>
+    <div class="row"><span class="k">Suggest</span><span class="v">Make it a base rule that travels into every subagent prompt the way Rule 18 does. Each document is read once. Only a changed region is re-read, by line range. A generated diff is written to one scratch file and consulted by section.</span></div>
+    <p class="src">Text: OcuPilot Rule 26.</p>
+  </article>
+
+  <article>
+    <div class="head"><h3>Tests meet a fresh instance, in either order, before CI does</h3><span class="chip high">High value</span></div>
+    <div class="row"><span class="k">Seen</span><span class="v">For a stretch, every story's first CI run went red on its own tests. CI runs each test on a fresh instance in shards, while local runs reuse an instance full of earlier stories' leftovers. There were three causes:
+      <ul>
+        <li>an old count or list of a shared screen element was still asserted;</li>
+        <li>a test relied on data it didn't create;</li>
+        <li>a browser test clicked before the screen had loaded.</li>
+      </ul>
+      Each red cost a rework cycle and a 50-minute run. Of the 8 stories merged after the rule, one went red on its own tests; the other reds were known flakes or infrastructure.</span></div>
+    <div class="row"><span class="k">Suggest</span><span class="v">A standing acceptance criterion in the spec template, with a “Shared surfaces:” line. In implement, a sweep updates every test that asserts a changed surface. QA and review check that each test is self-contained, graded MED. Before pushing, the runner rebuilds its throwaway and runs the story's tests forward and in reverse order.</span></div>
+    <p class="src">Text: OcuPilot Rule 30.</p>
+  </article>
+
+  <article>
+    <div class="head"><h3>Resolve CI before the next implement spawn, not the next plan spawn</h3><span class="chip high">High value</span></div>
+    <div class="row"><span class="k">Seen</span><span class="v">Waiting at resolution point (1) idled the lead about 30 minutes per story. A plan stage writes a spec and no code, so it can't build on a red.</span></div>
+    <div class="row"><span class="k">Suggest</span><span class="v">Move point (1) to just before the next <code>stage_spawned stage=implement</code>. Also adopt the addendum: push the code commit alone, and confirm its run registered by <code>headSha</code> before stacking any <code>[skip ci]</code> commit. With <code>cancel-in-progress</code>, a later push otherwise cancels the run being waited on.</span></div>
+    <p class="src">Text: OcuPilot Rule 28.</p>
+  </article>
+
+  <article>
+    <div class="head"><h3>Targeted tests inside implement; the full suite once</h3><span class="chip high">High value</span></div>
+    <div class="row"><span class="k">Seen</span><span class="v">Each story ran the full browser suite 4 to 9 times (about 12 minutes each) and the full client suite 5 to 17 times. The local full browser run was also less trustworthy than CI's, because a reused instance isn't idempotent.</span></div>
+    <div class="row"><span class="k">Suggest</span><span class="v">Inside the implement loop, run the story's own tests. Run the full suite once before <code>dev_complete</code>. Skip local tiers that CI already runs on fresh instances, and bring them back when CI is unavailable.</span></div>
+    <p class="src">Text: OcuPilot Rule 29.</p>
+  </article>
+
+  <article>
+    <div class="head"><h3>Prefer extending the sibling over copying it</h3><span class="chip med">Medium value</span></div>
+    <div class="row"><span class="k">Seen</span><span class="v">A blind quality scan of Opus, Sonnet and Haiku stories found one weakness common to all three: new code written as a copy of an existing sibling with only values changed. One method repeated about 60 of its sibling's 70 lines, and one review patch added a verbatim copy of an existing predicate. Review rarely flagged it, because each copy works.</span></div>
+    <div class="row"><span class="k">Suggest</span><span class="v">The plan names the sibling a new piece extends, or says why a copy is better. Implement prefers extending, and any copy carries a stated reason in the spec or commit. Review grades an unjustified copy MED and names both locations. Keep it a preference, not a ban: some copies are right.</span></div>
+    <p class="src">Text: OcuPilot Rule 31, plus a paragraph in the blind-hunter layer of <code>bmad-code-review.toml</code>.</p>
+  </article>
+
+  <article>
+    <div class="head"><h3>Cleanup stories carry only what blocks the next release</h3><span class="chip med">Medium value</span></div>
+    <div class="row"><span class="k">Seen</span><span class="v">N.0 cleanup stories sat on the critical path for items that weren't urgent: one took 2.8 hours and another 5.0. On an epic other epics depend on, that delay passes to everything behind it.</span></div>
+    <div class="row"><span class="k">Suggest</span><span class="v">An N.0 charters only release blockers, downstream-story blockers and CI flakes. Everything else is re-owned to a standing cleanup story after each release, capped at 12 entries by priority. A gating epic never gets an N.0. One or two leftover entries go to the story that already owns the code.</span></div>
+    <p class="src">Text: OcuPilot Rule 27.</p>
+  </article>
+
+  <article>
+    <div class="head"><h3>Bootstrap a worktree before its runner starts</h3><span class="chip med">Medium value</span></div>
+    <div class="row"><span class="k">Seen</span><span class="v"><code>new-epic-worktree.sh</code> checks out tracked files only. Gitignored dependencies (<code>node_modules</code>) and reference trees were missing, so every stage's verification failed and the failure was blamed on the story.</span></div>
+    <div class="row"><span class="k">Suggest</span><span class="v">A <code>bootstrap:</code> hook in <code>parallel.yaml</code> that runs after <code>PROVISIONED</code> and logs <code>worktree_bootstrapped</code>. The runner verifies the result before its first spawn and stops with a <code>TOOLING:</code> clarification if it's missing.</span></div>
+    <p class="src">Text: OcuPilot Rule 25.</p>
+  </article>
+
+  <article>
+    <div class="head"><h3>Integrate forward before completing; never dispatch onto a red feature branch</h3><span class="chip med">Medium value</span></div>
+    <div class="row"><span class="k">Seen</span><span class="v">Merges stayed conflict-free when the runner merged the feature branch into its own branch first, inside its worktree, and re-tested there.</span></div>
+    <div class="row"><span class="k">Suggest</span><span class="v">Make it the runner's last step before its completion contract. Gate every dispatch on <code>ci_green_verified</code> for the feature head itself, not only the epic head.</span></div>
+    <p class="src">Text: OcuPilot Rule 22.</p>
+  </article>
+
+  <article>
+    <div class="head"><h3>Document the review-layer count as a knob</h3><span class="chip low">Lower value</span></div>
+    <div class="row"><span class="k">Seen</span><span class="v">The implement stage's four self-review layers found 45 to 65 items per story and cost 30 to 45 minutes before the real code review. Two layers (verification-gap, intent-alignment) kept the value, and the Opus code review stayed. The opposite also held: in each of the first three stories, the Opus code review caught a test that could never fail.</span></div>
+    <div class="row"><span class="k">Suggest</span><span class="v">Document <code>instruction = ""</code> as the way to switch a layer off. Deleting the entry does nothing, because the renderer fills an absent layer back in from the defaults. State plainly that the full code review is the stage never to cut.</span></div>
+  </article>
+</section>
+
+<section>
+  <h2>2 · Concepts the kit doesn't have yet</h2>
+  <p class="intro">These came up because the run lasted weeks, shipped releases while it ran, and had a person who was often away.</p>
+
+  <article>
+    <div class="head"><h3>Compile and test targets, one set per runner</h3><span class="chip high">High value</span></div>
+    <div class="row"><span class="k">Seen</span><span class="v">The parallel kit never mentions slots or targets, but parallel work on a stateful runtime needs three kinds of target:
+      <ul>
+        <li>a long-lived dev instance per runner, which it compiles into;</li>
+        <li>a disposable instance per runner, with its own ports, for the fresh-instance check and smoke;</li>
+        <li>CI's own fresh instance per shard: five ObjectScript legs and three browser legs, plus a roll-up that proves every test ran in exactly one leg.</li>
+      </ul>
+      Five things went wrong without the kit's help:
+      <ul>
+        <li><b>Silent misrouting.</b> Four instances from one image answered on localhost with the same namespace and credentials. A tool call that didn't name its target went to an unrelated instance and returned plausible results, with no error.</li>
+        <li><b>Concurrent runs.</b> Eighteen test classes sent at once raced on one instance and left a database mounted with no directory. No API could clear it, and seven classes could no longer run there.</li>
+        <li><b>Teardown of the wrong instance.</b> A lead tore down the owner's second dev instance because a generated file's banner looked like its own.</li>
+        <li><b>Drift after a restart.</b> A restarted dev instance silently lost its test classes, because a restart doesn't apply compose changes.</li>
+        <li><b>Stale artifacts.</b> Browser tests run against the deployed bundle, not the working tree, so an edit proved nothing until it was rebuilt and redeployed.</li>
+      </ul></span></div>
+    <div class="row"><span class="k">Suggest</span><span class="v">Make runtime targets a first-class, stack-agnostic part of the parallel kit (databases, emulators, app servers):
+      <ul>
+        <li><b>Declare them.</b> A <code>slots:</code> table in <code>parallel.yaml</code> lists each slot's dev target, throwaway, ports, tool profile and container, and which stages use which. The orchestrator assigns slots, and the slot block is quoted verbatim into every spawn; OcuPilot adds this by hand as skeleton item 10.</li>
+        <li><b>No default target.</b> Every tool call and script names its target. A default that silently routes elsewhere is the worst failure here.</li>
+        <li><b>Ownership.</b> Owner-managed targets are never stopped or recreated by an agent. A runner tears down only a throwaway its own session started. The throwaway script refuses live names and ports.</li>
+        <li><b>One run per target.</b> A lock allows one test run in flight per target, at any depth.</li>
+        <li><b>Health and freshness.</b> Health-check the target at dispatch and after any restart: expected code loaded and the version matches. Rebuild and redeploy compiled artifacts before any result counts.</li>
+        <li><b>CI shards on fresh instances,</b> with the roll-up check and a timings file that balances the legs.</li>
+      </ul></span></div>
+    <p class="src">Text: OcuPilot Rules 21, 24 and 30; <code>_bmad/custom/parallel.yaml</code>; <code>scripts/ci-throwaway.sh</code>; the first section of OcuPilot's <code>CLAUDE.md</code> (the misrouting trap); <code>.claude/rules/objectscript-testing.md</code> (one run in flight).</p>
+  </article>
+
+  <article>
+    <div class="head"><h3>Story-boundary merges and releases</h3><span class="chip high">High value</span></div>
+    <div class="row"><span class="k">Seen</span><span class="v">OcuPilot cut 12 releases in two weeks while epics were still open. Each finished story merged at its own boundary when CI was green on the exact head. The kit only knows the end-of-epic merge (SC-4-P).</span></div>
+    <div class="row"><span class="k">Suggest</span><span class="v">A supported story-boundary merge mode. Its merge record carries:
+      <ul>
+        <li>an empty code diff against the green head;</li>
+        <li>a duplicate-ledger-id check;</li>
+        <li>upgrade triggers, such as a new stored property;</li>
+        <li>new config keys and changed defaults;</li>
+        <li>a one-line release note.</li>
+      </ul>
+      The orchestrator logged these ad hoc, and they drove every release's notes and upgrade check.</span></div>
+  </article>
+
+  <article>
+    <div class="head"><h3>Story-level waits across epics</h3><span class="chip med">Medium value</span></div>
+    <div class="row"><span class="k">Seen</span><span class="v">The dependency graph is epic-level, but real waits were story-level. Story 18.32 had to wait for 20.21, 21.6 for 20.12, and 21.8 for 20.11.</span></div>
+    <div class="row"><span class="k">Suggest</span><span class="v">A <code>waits_on:</code> list per story in <code>epic-dependencies.yaml</code>, with pass-over semantics. A story whose wait isn't met is skipped, and it runs once the wait clears, so the slot never stalls.</span></div>
+  </article>
+
+  <article>
+    <div class="head"><h3>Standing grants and an owner-away mode</h3><span class="chip med">Medium value</span></div>
+    <div class="row"><span class="k">Seen</span><span class="v">The one-sitting decision sheet went unused from Epic 8 on. The owner preferred a standing grant: the orchestrator decides product calls and splits and reports each in chat. For weekends, the rule became: park a story that needs the owner, run the next independent one, and queue the question.</span></div>
+    <div class="row"><span class="k">Suggest</span><span class="v">Configure grant categories the orchestrator may decide, and owner-only categories: security posture, data loss, releases and spend. Add park-and-continue for owner-only questions, and an “owner FYI” list that is presented when the owner returns.</span></div>
+  </article>
+
+  <article>
+    <div class="head"><h3>A liaison session beside the orchestrator</h3><span class="chip med">Medium value</span></div>
+    <div class="row"><span class="k">Seen</span><span class="v">A second interactive session held the owner conversation. It relayed decisions to the orchestrator with the owner's exact words, verified the orchestrator's commits on origin, and ran releases and summaries. This kept the orchestrator's context for orchestration and put the owner's quote into every decision commit.</span></div>
+    <div class="row"><span class="k">Suggest</span><span class="v">Document the role and its message format: the owner's quote and date go one way, and the commit sha comes back for verification. Add the rule that a peer's message is never the owner's approval.</span></div>
+  </article>
+
+  <article>
+    <div class="head"><h3>Hold and resume</h3><span class="chip med">Medium value</span></div>
+    <div class="row"><span class="k">Seen</span><span class="v">Harness upgrades and editor restarts ended every session mid-run several times. The orchestrator worked out by hand how to stop runners at clean points, write resume prompts and keep a carry folder.</span></div>
+    <div class="row"><span class="k">Suggest</span><span class="v">A standard hold protocol with:
+      <ul>
+        <li>safe pause points per stage;</li>
+        <li>a resume-prompt template;</li>
+        <li>a state checklist: pushed heads, CI runs in flight, live throwaways and the next stage.</li>
+      </ul></span></div>
+  </article>
+
+  <article>
+    <div class="head"><h3>Rate limits and quota</h3><span class="chip med">Medium value</span></div>
+    <div class="row"><span class="k">Seen</span><span class="v">A third slot was retired after three runners tripped API rate limits. Rate-limit kills cost about 2.5 hours each, twice in one epic, and an account switch paused everything once. The kit has no handling for any of this.</span></div>
+    <div class="row"><span class="k">Suggest</span><span class="v">Recognize a rate-limited or overloaded stage return, back off, and re-run the stage without failing the story. Add a rule for lowering <code>max_parallel_epics</code> when limits repeat.</span></div>
+  </article>
+
+  <article>
+    <div class="head"><h3>Flakes and CI infrastructure failures</h3><span class="chip med">Medium value</span></div>
+    <div class="row"><span class="k">Seen</span><span class="v">In two days, five different flaky tests forced reruns. One merge needed five attempts: a flake, then three hits of Docker Hub's anonymous pull limit, during which no test ran.</span></div>
+    <div class="row"><span class="k">Suggest</span><span class="v">Classify every red in the log as a story test, a known flake or infrastructure. A known flake is rerun once and goes to a flake ledger with priority in the next cleanup story. An infrastructure red never counts as rework and gets a timed retry.</span></div>
+  </article>
+</section>
+
+<section>
+  <h2>3 · Installing and upgrading</h2>
+
+  <article>
+    <div class="head"><h3>Project additions don't survive a re-render</h3><span class="chip high">High value</span></div>
+    <div class="row"><span class="k">Seen</span><span class="v">The kit keeps project rules in <code>skill-rules.md</code>, but OcuPilot re-applies the rest by hand after every re-render:
+      <ul>
+        <li>spawn-skeleton item 10;</li>
+        <li>a Rule 26 bullet in four stage rule lists;</li>
+        <li>Rule 28 and 29 sentences in the command;</li>
+        <li>three changes to the two derived <code>.toml</code> overrides.</li>
+      </ul>
+      So the project still runs 2026-09-13.1 while the kit is at 2026-10-08.2, and the 10-08 fixes were made locally first.</span></div>
+    <div class="row"><span class="k">Suggest</span><span class="v">An overlay file of anchored inserts, applied on every render. Add a check that each anchor still exists, so a renamed section fails loudly instead of dropping the insert.</span></div>
+  </article>
+
+  <article>
+    <div class="head"><h3>An upgrade window inside a continuous run</h3><span class="chip med">Medium value</span></div>
+    <div class="row"><span class="k">Seen</span><span class="v">The kit says not to upgrade while an orchestrator run is in flight, but this run has been in flight for a month.</span></div>
+    <div class="row"><span class="k">Suggest</span><span class="v">A story-boundary upgrade procedure: hold each runner at its next boundary, install, and let each runner pick up the new text at its next integrate-forward. OcuPilot did this by hand.</span></div>
+  </article>
+</section>
+
+<section>
+  <h2>4 · Smaller hardening</h2>
+
+  <article>
+    <div class="head"><h3>Verify on origin before logging a merge or a green</h3><span class="chip med">Medium value</span></div>
+    <div class="row"><span class="k">Seen</span><span class="v">A merge was reported but never pushed: an <code>&amp;&amp;</code> guard skipped the push silently.</span></div>
+    <div class="row"><span class="k">Suggest</span><span class="v">Require <code>git merge-base --is-ancestor &lt;sha&gt; origin/&lt;branch&gt;</code>, and <code>gh run view --json headSha,conclusion</code> on the exact head, before writing <code>merged</code> or <code>ci_green_verified</code>.</span></div>
+  </article>
+
+  <article>
+    <div class="head"><h3>Shell and commit-message traps</h3><span class="chip low">Lower value</span></div>
+    <div class="row"><span class="k">Seen</span><span class="v">Four traps:
+      <ul>
+        <li>In zsh, <code>$SHA:refs/…</code> is read as a history modifier and mangles the refspec.</li>
+        <li>A code commit whose message quoted the <code>[skip ci]</code> token got no CI run.</li>
+        <li><code>jobs -p</code> inside <code>$(…)</code> returns nothing, which orphaned background load.</li>
+        <li>macOS deletes <code>/tmp</code> files untouched for three days, which removed throwaway compose files.</li>
+      </ul></span></div>
+    <div class="row"><span class="k">Suggest</span><span class="v">Use <code>"${SHA}:refs/…"</code> in every snippet. Lint code-commit messages for skip tokens. Capture <code>$!</code> per job with a trap that kills them. Keep throwaway state outside <code>/tmp</code>.</span></div>
+  </article>
+
+  <article>
+    <div class="head"><h3>Back up the gitignored dispatch state</h3><span class="chip low">Lower value</span></div>
+    <div class="row"><span class="k">Seen</span><span class="v">A scripting error, a string replace with an empty match, destroyed <code>dispatch.yaml</code>. It had to be rebuilt by hand from the cycle log.</span></div>
+    <div class="row"><span class="k">Suggest</span><span class="v">Keep a write-ahead backup copy, or ship a script that rebuilds the file from the tracked log.</span></div>
+  </article>
+
+  <article>
+    <div class="head"><h3>Hold specs and comments to a budget</h3><span class="chip med">Medium value</span></div>
+    <div class="row"><span class="k">Seen</span><span class="v">One early story's spec reached 664 KB against a template that aims for 900 to 1,600 tokens. About a hundred doc comments narrated review rounds, and reviewers then filed findings against the narration itself.</span></div>
+    <div class="row"><span class="k">Suggest</span><span class="v">Enforce the template's <code>oversized</code> flag: from then on, a re-open appends only the open items. Keep review history out of code comments; it belongs in the spec's Review Triage Log. Hold rework summaries to what this pass changed.</span></div>
+    <p class="src">Text: the “Prose discipline” section of OcuPilot's <code>CLAUDE.md</code>.</p>
+  </article>
+
+  <article>
+    <div class="head"><h3>Log cycle time directly</h3><span class="chip low">Lower value</span></div>
+    <div class="row"><span class="k">Seen</span><span class="v">Per-story time was parsed out of the log after the fact, and that was error-prone. CI-fix commits logged under an earlier story's name made one story read 16.4 hours when it took 5.6.</span></div>
+    <div class="row"><span class="k">Suggest</span><span class="v">At each boundary the runner writes one <code>story_cycle</code> line, with:
+      <ul>
+        <li>plan-to-commit minutes;</li>
+        <li>implement passes;</li>
+        <li>the first CI result and how it was classified;</li>
+        <li>rework count;</li>
+        <li>the model used per stage.</li>
+      </ul></span></div>
+  </article>
+
+  <article>
+    <div class="head"><h3>A protocol for model trials</h3><span class="chip low">Lower value</span></div>
+    <div class="row"><span class="k">Seen</span><span class="v">The owner moved the implement stage between Opus, Sonnet and Haiku five times. What settled each question was a blind scan of the final code: Opus and Sonnet came out about even, while Haiku needed about 15% of its product lines patched. Some failures in the Haiku trial were caused by the harness, not the model.</span></div>
+    <div class="row"><span class="k">Suggest</span><span class="v">A trial template with:
+      <ul>
+        <li>fixed metrics: first-review HIGH and MED, rework passes, first CI result and the fresh-instance check;</li>
+        <li>a blind quality-scan prompt;</li>
+        <li>a column for harness-caused failures, so they aren't counted against the model.</li>
+      </ul></span></div>
+  </article>
+</section>
+
+<section>
+  <h2>5 · Structure: one skill per agent role</h2>
+  <p class="intro">The kit installs as a single slash command plus one shared rules file. Splitting it along the agents that use it would cut the context every agent carries, and make the overlay and upgrade problems smaller.</p>
+
+  <article>
+    <div class="head"><h3>Split the command into role skills</h3><span class="chip high">High value</span></div>
+    <div class="row"><span class="k">Seen</span><span class="v">The installed command is 1,365 lines and 237 KB, roughly 60K tokens (estimate). Every orchestrator, runner and sequential lead loads all of it, but each uses only part. The orchestrator needs dispatch and the merge queue. A runner needs the runner deltas, the story sequence and the stage-spawn pattern.</span></div>
+    <div class="row"><span class="k">Suggest</span><span class="v">
+      <ul>
+        <li><b>A thin <code>/epic-cycle</code> entry point</b> that resolves the mode and invokes the right role skill.</li>
+        <li><b>Orchestrator skill:</b> dispatch, slots and targets, the merge queue, story-boundary merges, decisions and grants.</li>
+        <li><b>Runner skill</b>, which is also the sequential lead: the story loop, spec and smoke gates, stage spawning, CI resolution and the completion contract.</li>
+        <li><b>Liaison skill</b>, optional: relaying the owner's decisions, verifying on origin, releases and summaries.</li>
+        <li><b>Occasional procedures as their own skills,</b> loaded only when used: burn-down, hold and resume, kit install and upgrade, and model trials.</li>
+      </ul></span></div>
+  </article>
+
+  <article>
+    <div class="head"><h3>Give each stage only its own rules</h3><span class="chip high">High value</span></div>
+    <div class="row"><span class="k">Seen</span><span class="v"><code>skill-rules.md</code> is 63 KB, roughly 16K tokens, and every stage agent loads it whole as persistent facts. Each rule's heading already names the stages it applies to, so most of what a stage loads isn't for it.</span></div>
+    <div class="row"><span class="k">Suggest</span><span class="v">Render one rules file per stage (plan, implement, QA, code review) from the same source, plus a small common file for the rules every depth needs: containment, read-once and foreground-only. Keep a single source of truth and let the render step slice it, so a rule can't drift between copies.</span></div>
+  </article>
+
+  <article>
+    <div class="head"><h3>Guard the split</h3><span class="chip med">Medium value</span></div>
+    <div class="row"><span class="k">Risk</span><span class="v">Rules cross-reference each other by number, and the role sections refer to one another. A role that needs a rule it didn't load would fail quietly.</span></div>
+    <div class="row"><span class="k">Suggest</span><span class="v">One Kit-Version across every skill. A render-time check that every cross-reference resolves inside the files that role loads. A short header in each role skill listing the rules it includes. Project overlays (section 3) then attach to a smaller, stable file instead of one 237 KB command.</span></div>
+  </article>
+</section>
+
+<footer>
+  Sources: OcuPilot's <code>_bmad/custom/skill-rules.md</code> (Rules 21–31), <code>_bmad/custom/bmad-build-auto.toml</code> and <code>bmad-code-review.toml</code>, and the run log <code>_bmad-output/implementation-artifacts/cycle-log-parallel.md</code>. Figures come from that log and the project's notes. The count of first-run reds after the fresh-instance rule covers stories merged 10-08 to 10-10.
+</footer>
+</main>

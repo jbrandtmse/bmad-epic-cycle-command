@@ -1,4 +1,4 @@
-I need you to update the model configuration for all BMAD Method skills to optimize performance against token cost for an InterSystems ObjectScript stack.
+I need you to update the model configuration for all BMAD Method skills to optimize performance against token cost for this project's stack.
 
 **Kit-Version:** 2026-09-11.1
 
@@ -18,7 +18,7 @@ Above-Opus tiers (Fable/Mythos, $10 / $50) are deliberately absent from these as
 
 The optimization pattern is **expensive planner/reviewer + efficient implementer**:
 
-- **Opus** is reserved for (a) high-judgment, low-frequency skills where quality errors cascade (architecture, spec, PRD, story-context assembly), and (b) adversarial review/critique skills that act as the quality gate over Sonnet-generated work. Since Sonnet 5 reached near-Opus coding quality, routine implementation no longer needs Opus — the Opus-tier review layer catches what slips through, which matters most on an uncommon codebase like ObjectScript.
+- **Opus** is reserved for (a) high-judgment, low-frequency skills where quality errors cascade (architecture, spec, PRD, story-context assembly), and (b) adversarial review/critique skills that act as the quality gate over Sonnet-generated work. Since Sonnet 5 reached near-Opus coding quality, routine implementation no longer needs Opus — the Opus-tier review layer catches what slips through, which matters most on an uncommon codebase (a primary language LLMs see little of — section 4).
 - **Sonnet** carries all implementation, structured authoring, research, documentation, and facilitation work — the highest-frequency skills, so this is where most of the savings come from.
 - **Haiku** only runs mechanical parse/route/status skills and deprecated routing shims. Never assign Haiku to a skill that may ingest a whole codebase or large multi-doc context — its window is only 200K tokens (the other two have 1M). Expectation-setting: Haiku pins pay off only on *standalone* invocations — inside `/epic-cycle`, the sprint-planning/status/story gates run lead-side, where per-skill model switching does not apply. Do not expect pipeline savings from this tier; it is correct, free future-proofing.
 - Skills that orchestrate subagents matter more than they look: `bmad-code-review`'s review layers (`blind-hunter`, `edge-case-hunter`, `verification-gap`, `acceptance-auditor`) and `bmad-build-auto`'s implementation-handoff subagent plus its four review layers run at the parent agent's model because nested subagent spawns **inherit** the parent's model when no `model` parameter is passed — the skills' own "same model capability as the current session" wording describes exactly that inheritance. The tier is actually enforced by the `/epic-cycle` stage map passing `model:` on each stage spawn (plan → opus, implement → sonnet, qa → sonnet, code-review → opus); the frontmatter pin documents the same intent. v6.11 adds a second, upstream-sanctioned lever: `implementation_handoff` and `review_layers[].instruction` in `_bmad/custom/<skill>.toml` are free prose that may name a model or an external tool for one internal subagent — use it only where a stage must run inline (see rule 4).
@@ -169,7 +169,7 @@ overrides:                      # optional: STAGE -> tier re-pins (plan | implem
 history:                        # append-only; every change records its evidence
   - date: 2026-07-19
     action: escalate-implement-to-opus
-    evidence: "epic-2: high+med avg 2.5/story with implement=claude-sonnet-5; 2 rework loops (ObjectScript $ORDER semantics)"
+    evidence: "epic-2: high+med avg 2.5/story with implement=claude-sonnet-5; 2 rework loops (language-semantics defects)"
     approved_by: user
 ```
 
