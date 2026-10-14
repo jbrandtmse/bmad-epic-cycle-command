@@ -2,7 +2,7 @@ I need you to update the model configuration for all BMAD Method skills to optim
 
 **Kit-Version:** 2026-09-11.1
 
-**Requires BMAD Method v6.11.0 or later.** The skill inventory below reflects the v6.11 tree (`bmad-build` / `bmad-build-auto`, the eight-skill core, the `v6-shims`); on a 6.10 install use the previous version of this document.
+**Requires BMAD Method 6.11.0–6.12.x.** BMAD v7 reorganizes its skills, so this inventory does not apply there. The skill inventory below reflects the v6.11 tree (`bmad-build` / `bmad-build-auto`, the eight-skill core, the `v6-shims`); on a 6.10 install use the previous version of this document.
 
 ## Strategy (why these assignments)
 

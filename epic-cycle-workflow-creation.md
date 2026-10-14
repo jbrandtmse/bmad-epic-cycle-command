@@ -1,8 +1,8 @@
 # Epic Cycle Workflow — Installation Kit
 
-**Kit-Version:** 2026-10-10.1
+**Kit-Version:** 2026-10-14.1
 
-**Requires BMAD Method v6.11.0 or later** (`_bmad/_config/manifest.yaml` → `installation.version`). This kit drives the v6.11 Phase-4 chain — `bmad-sprint-planning → bmad-build-auto → bmad-code-review` — and its rendered skills need `uv` (Python 3.11+ provisioned by uv) on PATH. For BMAD ≤ 6.10 projects use the last pre-6.11 kit release; do not install this kit there.
+**Requires BMAD Method 6.11.0–6.12.x, not v7** (`_bmad/_config/manifest.yaml` → `installation.version`; 6.12.2 recommended — its helper scripts write UTF-8 on Windows). BMAD v7, which the 6.12.2 installer advertises as a preview, replaces what this kit drives; Step 1 and the command's pre-flight refuse it. This kit drives the v6.11 Phase-4 chain — `bmad-sprint-planning → bmad-build-auto → bmad-code-review` — and its rendered skills need `uv` (Python 3.11+ provisioned by uv) on PATH. For BMAD ≤ 6.10 projects use the last pre-6.11 kit release; do not install this kit there.
 
 A self-contained kit for installing the `/epic-cycle` slash command and its BMAD skill customizations into any BMAD project. Run this as a Claude Code session — the session reads each step, performs the indicated file operations, and verifies the result.
 
@@ -36,7 +36,10 @@ Run these checks (the Claude session executes each; report findings inline):
 
 ```bash
 # 0. BMAD version and runtime prerequisites (HARD gates)
-grep -A1 "^installation:" _bmad/_config/manifest.yaml | grep version          # must be >= 6.11.0
+grep -A1 "^installation:" _bmad/_config/manifest.yaml | grep version          # must be >= 6.11.0 and 6.12.x at most
+# BMAD v7 gate — v7 (previewed with `npx skills add bmad-code-org/BMAD-METHOD` + `bmad setup`) replaces the review layers, sprint planning and story files this kit drives
+grep -c '^\[\[workflow.review_layers\]\]' .claude/skills/bmad-build-auto/customize.toml   # >= 1 (6.11–6.12.x declare 4); 0 = BMAD-V7
+ls .claude/skills/bmod-method/bmod.toml ~/.claude/skills/bmod-method/bmod.toml 2>/dev/null   # no output; a project hit = BMAD-V7, a user-directory hit only = V7-GLOBAL
 uv --version                                                                  # must succeed
 uv run --no-cache _bmad/scripts/resolve_config.py --project-root . --key core.project_name   # exit 0 = uv can run the BMAD scripts (Python >= 3.11); exit 3 = no Python 3.11+
 test -f .claude/skills/bmad-build-auto/SKILL.md && echo "BUILD-AUTO-PRESENT" || echo "BUILD-AUTO-ABSENT"
@@ -71,6 +74,8 @@ grep -cE "^- \*\*\[|^## Deferred from:|^- source_spec:" _bmad-output/implementat
 
 | Finding | Action |
 | --- | --- |
+| BMAD-V7 — `bmad-build-auto`'s installed `customize.toml` declares no `[[workflow.review_layers]]`, or `.claude/skills/bmod-method/bmod.toml` exists (a mixed install — a 6.12 manifest with v7 skills on top — counts). Check this row first: on v7 the rows below would wrongly advise an upgrade | HALT with: "This kit supports BMAD Method 6.11–6.12.x. This project runs BMAD v7 (<the marker found>), which replaces the review layers, sprint planning and story files the kit drives — its overrides would stop v7's renderer. To keep using these kits, keep the project on 6.12.x (`npx bmad-method@6.12 install --action update --modules bmm --tools claude-code --yes` in the project directory); try the v7 preview in a separate clone." Install nothing. |
+| V7-GLOBAL — `bmod-method/bmod.toml` only under `~/.claude/skills` (a v7 preview installed for the user, not for this project) | HALT and ask: user-level skills with the same names can load alongside, or instead of, the project's 6.12 skills. Continue only once the user has removed the global preview, or confirms that the project's own skills take precedence in their setup. |
 | BMAD version < 6.11.0, or `BUILD-AUTO-ABSENT` / `SPRINT-PLAN-ABSENT` / `RENDER-ABSENT` | HALT. Tell the user to upgrade BMAD (`npx bmad-method install` in the project, choose the update path) or to use the pre-6.11 kit release. Nothing in this kit works against the old pipeline. |
 | `uv` missing | HALT with the install pointer (https://docs.astral.sh/uv/). `bmad-build-auto` renders via `uv run` and halts on activation without it; every other BMAD skill resolves its customization through `uv run` too. |
 | `OUTPUT-IGNORED` | HALT: `_bmad-output/implementation-artifacts` is gitignored. The pipeline's durable state (cycle logs, `sprint-status.yaml`, specs, `deferred-work.md`) must be committed on the epic branch — Rule 16's bookkeeping commits, resume, and the parallel merge queue all depend on it. Have the user drop `_bmad-output/` (or at least `implementation-artifacts/`) from `.gitignore` and commit the directory; resume after. |
@@ -552,7 +557,7 @@ FILE="${1:-}"; CMD="${2:-}"
 usage() {
   cat >&2 <<'EOF'
 usage: bash ledger.sh <deferred-work.md> <command> [args]
-  load                        counts: total open routed escalated decision_pending terminal owner_unknown, then owner:<key>=<n> for non-terminal
+  load                        counts: total open routed escalated decision_pending terminal status_unknown owner_unknown, then owner:<key>=<n> for non-terminal
                               (an owner that is not `burndown` and not a key in the sibling sprint-status.yaml is suffixed " UNKNOWN")
   slice <owner>|all|unknown   non-terminal entries: DW-n TAB status TAB owner TAB summary (`unknown` = owners the tracker does not know)
   show DW-<n>                 print one entry verbatim
@@ -566,6 +571,9 @@ usage: bash ledger.sh <deferred-work.md> <command> [args]
 Owner validation: `new` and any `append` carrying owner= refuse an owner that is neither `burndown` nor a
 `development_status:` key in <ledger-dir>/sprint-status.yaml (skipped when that file is absent, or with
 LEDGER_OWNER_CHECK=off). A retitled story changes its key; a stale key would orphan the entry from every gate.
+Status validation: `new` and any `append` carrying status= refuse a status outside the Rule 15 grammar
+(LEDGER_STATUS_CHECK=off to bypass, migration only). A trailer's key=value fields end at its first `note=`:
+text inside a note is never read as a field.
 EOF
   exit 1
 }
@@ -573,7 +581,7 @@ EOF
 case "$CMD" in load|slice|show|next-id|new|append) ;; *) usage ;; esac
 if [ ! -f "$FILE" ]; then
   case "$CMD" in
-    load) echo "total=0 open=0 routed=0 escalated=0 decision_pending=0 terminal=0"; exit 0 ;;
+    load) echo "total=0 open=0 routed=0 escalated=0 decision_pending=0 terminal=0 status_unknown=0 owner_unknown=0"; exit 0 ;;
     slice) exit 0 ;;
     next-id) echo 1; exit 0 ;;
     new) printf '# Deferred Work Ledger\n\nSee _bmad/custom/skill-rules.md Rule 15 (entry grammar) and Rule 17 (the drain).\n' > "$FILE" ;;
@@ -585,6 +593,7 @@ fi
 scan() {
   awk -v mode="$1" -v arg="${2:-}" '
     function terminal(s) { return (s == "by-design" || s == "wontfix-theoretical" || s == "wontfix-accepted" || s == "dropped" || s ~ /^resolved-by:/) }
+    function known(s) { return (terminal(s) || s == "open" || s == "routed" || s == "escalated" || s == "decision-pending") }
     function emit(   k) {
       if (id == "") return
       n++; ids[n] = id; st[n] = status; ow[n] = owner; sm[n] = summary; blk[n] = block
@@ -598,6 +607,7 @@ scan() {
       block = block "\n" $0
       if ($0 ~ /^- [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9:]+Z /) {
         for (i = 3; i <= NF; i++) {
+          if ($i ~ /^note=/) break
           if ($i ~ /^status=/) status = substr($i, 8)
           else if ($i ~ /^owner=/) owner = substr($i, 7)
         }
@@ -609,9 +619,9 @@ scan() {
         for (i = 1; i <= n; i++) {
           total++
           if (terminal(st[i])) term++
-          else { cnt[st[i]]++; own[ow[i]]++ }
+          else { cnt[st[i]]++; own[ow[i]]++; if (!known(st[i])) sunk++ }
         }
-        printf "total=%d open=%d routed=%d escalated=%d decision_pending=%d terminal=%d\n", total, cnt["open"]+0, cnt["routed"]+0, cnt["escalated"]+0, cnt["decision-pending"]+0, term+0
+        printf "total=%d open=%d routed=%d escalated=%d decision_pending=%d terminal=%d status_unknown=%d\n", total, cnt["open"]+0, cnt["routed"]+0, cnt["escalated"]+0, cnt["decision-pending"]+0, term+0, sunk+0
         for (k in own) printf "owner:%s=%d\n", k, own[k]
       } else if (mode == "slice") {
         for (i = 1; i <= n; i++) if (!terminal(st[i]) && (arg == "all" || ow[i] == arg)) printf "%s\t%s\t%s\t%s\n", ids[i], st[i], ow[i], sm[i]
@@ -658,6 +668,18 @@ TRACKER="$(dirname "$FILE")/sprint-status.yaml"
 tracker_keys() {
   awk '/^development_status:/ { f = 1; next } f && /^[^ #]/ { f = 0 } f && /^  [A-Za-z0-9_-]+:/ { k = $1; sub(/:$/, "", k); print k }' "$TRACKER"
 }
+# Status validation (Rule 15 grammar). A status outside it is neither terminal nor one of the non-terminal states the
+# gates select by, so the entry silently escapes them; refuse it on write the way an unknown owner is refused.
+check_status() {
+  [ "${LEDGER_STATUS_CHECK:-on}" != "off" ] || return 0
+  case "$1" in
+    open|routed|escalated|decision-pending|by-design|wontfix-theoretical|wontfix-accepted|dropped|resolved-by:?*) return 0 ;;
+  esac
+  echo "ERROR: status=$1 is not in the grammar (open|routed|escalated|decision-pending|by-design|wontfix-theoretical|wontfix-accepted|dropped|resolved-by:<story-key>); LEDGER_STATUS_CHECK=off to bypass (migration only)." >&2
+  return 1
+}
+# The key=value fields of a trailer end at its first `note=` token; nothing after it is a field.
+trailer_field() { printf '%s' "$2" | awk -v k="$1" '{ for (i = 1; i <= NF; i++) { if ($i ~ /^note=/) exit; if (index($i, k "=") == 1) { print substr($i, length(k) + 2); exit } } }'; }
 owner_check_active() { [ "${LEDGER_OWNER_CHECK:-on}" != "off" ] && [ -f "$TRACKER" ]; }
 check_owner() {
   owner_check_active || return 0
@@ -695,8 +717,11 @@ case "$CMD" in
   new)
     [ $# -eq 12 ] || { echo "ERROR: new needs exactly 10 arguments (see usage)" >&2; usage; }
     SUMMARY="$3"; SOURCE="$4"; SEV="$5"; RISK="$6"; FOOT="$7"; EVID="$8"; STATUS="$9"; OWNER="${10}"; BY="${11}"; NOTE="${12}"
+    # The trailer writes its own `note=`; a caller that passed one (Rule 15 writes `note=human=<what>`) would record `note=note=...`.
+    NOTE="${NOTE#note=}"
     case "$SUMMARY$SOURCE$EVID$NOTE" in *$'\n'*) echo "ERROR: arguments must be single-line" >&2; exit 1 ;; esac
     check_owner "$OWNER" || exit 1
+    check_status "$STATUS" || exit 1
     if [ -n "${LEDGER_ID_COUNTER:-}" ]; then NUM="$(claim_counter_id "$LEDGER_ID_COUNTER")" || exit 1
     else NUM="$(scan next-id)"; fi
     ID="DW-$NUM"
@@ -711,7 +736,8 @@ case "$CMD" in
     [ -n "${3:-}" ] && [ -n "${4:-}" ] || usage
     ID="$3"; LINE="$4"
     case "$LINE" in *$'\n'*) echo "ERROR: trailer must be a single line" >&2; exit 1 ;; esac
-    case " $LINE" in *" owner="*) check_owner "$(printf '%s' "$LINE" | tr ' ' '\n' | grep -m1 '^owner=' | cut -d= -f2-)" || exit 1 ;; esac
+    OWNER_TOK="$(trailer_field owner "$LINE")"; [ -z "$OWNER_TOK" ] || check_owner "$OWNER_TOK" || exit 1
+    STATUS_TOK="$(trailer_field status "$LINE")"; [ -z "$STATUS_TOK" ] || check_status "$STATUS_TOK" || exit 1
     scan exists "$ID" || { echo "ERROR: $ID not found" >&2; exit 1; }
     TS="$(now)"
     # Insert the trailer as the last line of the entry (before the next heading or EOF). Pure line insertion: union-merge safe.
@@ -765,7 +791,7 @@ Uses the standard `Agent` tool to spawn pipeline-stage subagents and the `Skill`
 
 If `Agent` is a deferred tool, load its schema via `ToolSearch` with `"select:Agent"` before first use. If `Agent` is unavailable, halt and surface to the user.
 
-**BMAD + runtime gate (second action):** read `installation.version` from `_bmad/_config/manifest.yaml` and require ≥ 6.11.0 — this command drives `bmad-build-auto`, which does not exist earlier (6.10 projects: use the pre-6.11 kit). Run `uv --version`; HALT with the install pointer (https://docs.astral.sh/uv/) if it fails — `bmad-build-auto` renders itself through `uv run _bmad/scripts/render_skill.py` and halts on activation without it. Then run `uv run --no-cache _bmad/scripts/resolve_config.py --project-root <abs-root> --key core.project_name`: exit 0 proves uv can run BMAD's scripts (Python ≥ 3.11 available or provisioned); exit 3 means no Python 3.11+ — HALT. Verify these exist: `.claude/skills/bmad-build-auto/SKILL.md`, `.claude/skills/bmad-code-review/SKILL.md`, `.claude/skills/bmad-qa-generate-e2e-tests/SKILL.md`, `.claude/skills/bmad-sprint-planning/scripts/sprint_plan.py` (on a plugin-namespaced install, the equivalent paths). Verify the durable state is tracked: `git check-ignore -q _bmad-output/implementation-artifacts` must FAIL (exit 1) — if the directory is gitignored, HALT: cycle logs, `sprint-status.yaml`, specs and the ledger must live on the epic branch (resume, bookkeeping commits, and the parallel merge queue depend on it); the user removes `_bmad-output/` from `.gitignore` (keeping `_bmad/render/`, `*.user.toml`, `.worktrees/` ignored). Then determine how CI can be read (see "CI Is a Gate"): `ci=gh` when `.github/workflows/*.yml` exist, `gh auth status` succeeds, and `git remote get-url origin` is a GitHub URL; `ci=none` when the repo has no workflows; `ci=unavailable` otherwise — surface `unavailable` once ("CI results cannot be read from this session; the merge gate will ask you to confirm CI by hand") rather than proceeding as if the suite's local result were the shipped one. Log `runtime_gate bmad=<version> uv=<version> ci=<gh|none|unavailable>`. Resolve `<project_name>`, `<impl>` and `<planning>` with BMAD's config resolver (the shorthand paragraph below). Read the launch environment ("Permission Mode": `printenv CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH CLAUDE_CODE_RETRY_WATCHDOG BASH_MAX_TIMEOUT_MS`) and log `launch_env`; an explicit depth below what the run needs (2 sequential, 3 parallel) → HALT and say which setting to raise.
+**BMAD + runtime gate (second action):** read `installation.version` from `_bmad/_config/manifest.yaml` and require ≥ 6.11.0 — this command drives `bmad-build-auto`, which does not exist earlier (6.10 projects: use the pre-6.11 kit). **BMAD v7 gate**, checked before the version comparison (a v7 project may have no manifest, or a stale 6.12 one under v7 skills): `.claude/skills/bmad-build-auto/customize.toml` (or its plugin-namespaced equivalent) must declare `[[workflow.review_layers]]`, and no `bmod-method/bmod.toml` may exist under `.claude/skills/` or `~/.claude/skills/`. Otherwise HALT with: "This kit supports BMAD Method 6.11–6.12.x. This project runs BMAD v7 (<the marker found>), which replaces the review layers, sprint planning and story files the kit drives — its overrides would stop v7's renderer. To keep using these kits, keep the project on 6.12.x (`npx bmad-method@6.12 install --action update --modules bmm --tools claude-code --yes` in the project directory); try the v7 preview in a separate clone." Run `uv --version`; HALT with the install pointer (https://docs.astral.sh/uv/) if it fails — `bmad-build-auto` renders itself through `uv run _bmad/scripts/render_skill.py` and halts on activation without it. Then run `uv run --no-cache _bmad/scripts/resolve_config.py --project-root <abs-root> --key core.project_name`: exit 0 proves uv can run BMAD's scripts (Python ≥ 3.11 available or provisioned); exit 3 means no Python 3.11+ — HALT. Verify these exist: `.claude/skills/bmad-build-auto/SKILL.md`, `.claude/skills/bmad-code-review/SKILL.md`, `.claude/skills/bmad-qa-generate-e2e-tests/SKILL.md`, `.claude/skills/bmad-sprint-planning/scripts/sprint_plan.py` (on a plugin-namespaced install, the equivalent paths). Verify the durable state is tracked: `git check-ignore -q _bmad-output/implementation-artifacts` must FAIL (exit 1) — if the directory is gitignored, HALT: cycle logs, `sprint-status.yaml`, specs and the ledger must live on the epic branch (resume, bookkeeping commits, and the parallel merge queue depend on it); the user removes `_bmad-output/` from `.gitignore` (keeping `_bmad/render/`, `*.user.toml`, `.worktrees/` ignored). Then determine how CI can be read (see "CI Is a Gate"): `ci=gh` when `.github/workflows/*.yml` exist, `gh auth status` succeeds, and `git remote get-url origin` is a GitHub URL; `ci=none` when the repo has no workflows; `ci=unavailable` otherwise — surface `unavailable` once ("CI results cannot be read from this session; the merge gate will ask you to confirm CI by hand") rather than proceeding as if the suite's local result were the shipped one. Log `runtime_gate bmad=<version> uv=<version> ci=<gh|none|unavailable>`. Resolve `<project_name>`, `<impl>` and `<planning>` with BMAD's config resolver (the shorthand paragraph below). Read the launch environment ("Permission Mode": `printenv CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH CLAUDE_CODE_RETRY_WATCHDOG BASH_MAX_TIMEOUT_MS`) and log `launch_env`; an explicit depth below what the run needs (2 sequential, 3 parallel) → HALT and say which setting to raise.
 
 **Telemetry gate (third action):** scan every existing `cycle-log-epic-*.md` for `model_tier_checkpoint` entries whose `result` is `recommend_escalate` or `offer_mixed` with `applied=false`. If any exist, surface them once before starting ("Epic N's checkpoint recommended escalating `implement` to Opus (evidence …); no policy file exists / the user declined — apply now, or continue as is?") and log `telemetry_gate pending=<N>`. Accumulated telemetry that nobody acts on is the failure mode this gate exists for.
 
@@ -2096,9 +2122,11 @@ After writing all files, run these checks:
    grep -c "Supervised, not unattended" .claude/commands/epic-cycle.md   # 1 (Permission Mode)
    grep -c "read, never recalled" .claude/commands/epic-cycle.md         # 1 (Cycle Log Format)
    grep -c "at least ten\|find at least N" _bmad/custom/bmad-build-auto.toml _bmad/custom/bmad-code-review.toml   # 0 each (hunter quota softened — 6.11 and 6.12 wordings)
-   grep -c "Rule 19" _bmad/custom/bmad-code-review.toml                  # 1 (verification-gap layer)
-   grep -c "one test class or suite" _bmad/custom/bmad-build-auto.toml   # 5 (handoff + 4 layers — Rule 18 (3) test serialization)
-   grep -c "one test class or suite" _bmad/custom/bmad-code-review.toml  # 4
+   LA=$(grep -c '^instruction = """' _bmad/custom/bmad-build-auto.toml)    # active build-auto layers: 4, less any the project overlay switched off (instruction = "")
+   LC=$(grep -c '^instruction = """' _bmad/custom/bmad-code-review.toml)   # active code-review layers: 4, likewise
+   grep -c "Rule 19" _bmad/custom/bmad-code-review.toml                  # 1 (verification-gap layer; 0 only if the overlay switched it off)
+   grep -c "one test class or suite" _bmad/custom/bmad-build-auto.toml   # LA + 1 (handoff + active layers — Rule 18 (3) test serialization)
+   grep -c "one test class or suite" _bmad/custom/bmad-code-review.toml  # LC
    grep -c "Exit condition" _bmad/custom/skill-rules.md                  # 1 (Rule 15 — the loop can end)
    grep -c "Rework re-dispatch" .claude/commands/epic-cycle.md           # >= 2 (implement re-spawn block, Rework Loop, Pipeline Flow)
    grep -c "Rework re-review" .claude/commands/epic-cycle.md             # >= 3 (CR block, CR re-spawn block, Pipeline Flow)
@@ -2109,13 +2137,13 @@ After writing all files, run these checks:
    grep -c "no HIGH closes the story" .claude/commands/epic-cycle.md     # >= 2 (Pipeline Flow, Rework Loop, anti-pattern)
    grep -ci "return exactly once" .claude/commands/epic-cycle.md         # >= 4 (plan, implement, QA, CR blocks)
    grep -c "Rule 18" .claude/commands/epic-cycle.md                      # >= 5
-   grep -c "Containment (/epic-cycle Rule 18)" _bmad/custom/bmad-build-auto.toml   # 5 (handoff + 4 layers)
-   grep -c "Containment (/epic-cycle Rule 18)" _bmad/custom/bmad-code-review.toml  # 4
+   grep -c "Containment (/epic-cycle Rule 18)" _bmad/custom/bmad-build-auto.toml   # LA + 1 (handoff + active layers)
+   grep -c "Containment (/epic-cycle Rule 18)" _bmad/custom/bmad-code-review.toml  # LC
    grep -c "Synchronous is stated, never assumed" _bmad/custom/skill-rules.md   # 1 (Rule 18 (5))
    grep -c "run_in_background: false" .claude/commands/epic-cycle.md     # >= 8 (Permission Mode, invocation pattern, plan/implement/QA/CR blocks, pre-warm, anti-pattern)
    grep -h "^Launch a" _bmad/custom/bmad-build-auto.toml _bmad/custom/bmad-code-review.toml | grep -vc "run_in_background: false"   # 0 (every launch line names the flag — transformation (d))
-   grep -c "run_in_background: false" _bmad/custom/bmad-build-auto.toml  # 6 (handoff launch + handoff containment + 4 layer launches)
-   grep -c "run_in_background: false" _bmad/custom/bmad-code-review.toml # 4 (one per layer launch)
+   grep -c "run_in_background: false" _bmad/custom/bmad-build-auto.toml  # LA + 2 (handoff launch + handoff containment + one per active layer launch)
+   grep -c "run_in_background: false" _bmad/custom/bmad-code-review.toml # LC (one per active layer launch)
    grep -c "timeout: 600000" _bmad/custom/skill-rules.md                 # 1 (Rule 18 (5) — the foreground cap and batching)
    grep -c "timeout: 600000" _bmad/custom/bmad-build-auto.toml           # 1 (handoff containment)
    grep -c "timeout: 600000" .claude/commands/epic-cycle.md              # >= 4 (plan, implement, QA, CR blocks)
@@ -2128,6 +2156,7 @@ After writing all files, run these checks:
    grep -c "story_cycle" .claude/commands/epic-cycle.md                  # >= 3 (Task Sequence, Pipeline Flow, stage enum)
    grep -c "stage_api_error" .claude/commands/epic-cycle.md              # >= 2 (Agent Invocation Pattern, stage enum)
    grep -c "launch_env" .claude/commands/epic-cycle.md                   # >= 3 (pre-flight, Permission Mode, stage enum)
+   grep -c "BMAD v7 gate" .claude/commands/epic-cycle.md                 # 1 (pre-flight refuses BMAD v7)
    grep -c "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH" .claude/commands/epic-cycle.md   # >= 2 (pre-flight, Permission Mode)
    grep -c "Extend, don't copy" _bmad/custom/skill-rules.md              # 1 (Rule 2)
    grep -c "Runtime targets get the same discipline" _bmad/custom/skill-rules.md   # 1 (Rule 13)
@@ -2135,7 +2164,7 @@ After writing all files, run these checks:
    grep -c "Comments state the contract" _bmad/custom/skill-rules.md     # 1 (Rule 14)
    grep -c "Hermeticity: a test passes for its own reasons" _bmad/custom/skill-rules.md   # 1 (Rule 19)
    grep -c "Read each file once" _bmad/custom/bmad-build-auto.toml       # 1 (handoff containment)
-   grep -c "hermeticity" _bmad/custom/bmad-build-auto.toml _bmad/custom/bmad-code-review.toml   # 1 each (verification-gap brief)
+   grep -c "hermeticity" _bmad/custom/bmad-build-auto.toml _bmad/custom/bmad-code-review.toml   # 1 each (verification-gap brief; 0 only where the overlay switched that layer off)
    grep -c "LEDGER_ID_COUNTER" _bmad/scripts/ledger.sh                   # >= 2 (shared id counter for parallel runs)
    grep -c "armed=" .claude/commands/epic-cycle.md                       # >= 2 (checkpoint runs on every project)
    grep -c "ledger_adjudicated" .claude/commands/epic-cycle.md    # >= 5 (Task Sequence, Pipeline Flow, Ledger Drain, resume, stage enum)
@@ -2164,9 +2193,9 @@ After writing all files, run these checks:
    done
    uv run --no-cache _bmad/scripts/resolve_customization.py --skill "$PWD/.claude/skills/bmad-build" --key workflow.open_spec
    uv run --no-cache _bmad/scripts/resolve_customization.py --skill "$PWD/.claude/skills/bmad-build-auto" --key workflow.implementation_handoff | grep -c "Rule 18"   # 1
-   uv run --no-cache _bmad/scripts/resolve_customization.py --skill "$PWD/.claude/skills/bmad-build-auto" --key workflow.review_layers | grep -c "Rule 18"           # 4 (one per layer; confirms the id-keyed replace merged)
-   uv run --no-cache _bmad/scripts/resolve_customization.py --skill "$PWD/.claude/skills/bmad-build-auto" --key workflow.review_layers | grep -c "run_in_background: false"   # 4 (every merged layer launches synchronously)
-   uv run --no-cache _bmad/scripts/resolve_customization.py --skill "$PWD/.claude/skills/bmad-code-review" --key workflow.review_layers | grep -c "run_in_background: false"  # 4
+   uv run --no-cache _bmad/scripts/resolve_customization.py --skill "$PWD/.claude/skills/bmad-build-auto" --key workflow.review_layers | grep -c "Rule 18"           # LA (one per active layer; confirms the id-keyed replace merged)
+   uv run --no-cache _bmad/scripts/resolve_customization.py --skill "$PWD/.claude/skills/bmad-build-auto" --key workflow.review_layers | grep -c "run_in_background: false"   # LA (every active merged layer launches synchronously)
+   uv run --no-cache _bmad/scripts/resolve_customization.py --skill "$PWD/.claude/skills/bmad-code-review" --key workflow.review_layers | grep -c "run_in_background: false"  # LC
    uv run --no-cache _bmad/scripts/resolve_customization.py --skill "$PWD/.claude/skills/bmad-code-review" --key workflow.review_layers | grep -c "Rule 19"          # 1 (verification-gap carries the falsifiability brief)
    uv run --no-cache _bmad/scripts/resolve_customization.py --skill "$PWD/.claude/skills/bmad-code-review" --key workflow.review_layers | grep -c "at least ten\|find at least N"     # 0 (the override replaced the upstream quota)
    ```
@@ -2199,6 +2228,10 @@ After writing all files, run these checks:
    LEDGER_ID_COUNTER="$C" bash _bmad/scripts/ledger.sh "$T" new "Counter test" "kit-step-4" low low in-story "self-test" open 0-0-selftest install "x"   # prints DW-7 (shared counter wins over local next)
    cat "$C"   # 8
    echo x > "$C"; LEDGER_ID_COUNTER="$C" bash _bmad/scripts/ledger.sh "$T" new "Bad counter" "kit-step-4" low low in-story "self-test" open 0-0-selftest install "x"; echo "exit=$?"   # ERROR … exit=1 (a broken counter is never silently ignored)
+   bash _bmad/scripts/ledger.sh "$T" new "Typo" "kit-step-4" low low in-story "self-test" opne 0-0-selftest install "x"; echo "exit=$?"   # ERROR … not in the grammar … exit=1 (Rule 15 statuses only)
+   bash _bmad/scripts/ledger.sh "$T" append DW-1 "by=install note=status=open"   # text after note= is not a field
+   bash _bmad/scripts/ledger.sh "$T" load | head -1   # total=2 open=1 … terminal=1 status_unknown=0 (DW-1 stays dropped)
+   bash _bmad/scripts/ledger.sh "$T" new "Prefix" "kit-step-4" low low in-story "self-test" decision-pending 0-0-selftest install "note=human=x" >/dev/null; grep -c "note=note=" "$T"   # 0 (a caller's note= prefix is stripped)
    rm -f "$T" "$C"
    # owner validation against a scratch tracker (the ledger's sibling sprint-status.yaml)
    D=$(mktemp -d -t ledger-XXXX); printf 'development_status:\n  1-1-real-story: backlog\n' > "$D/sprint-status.yaml"
@@ -2219,9 +2252,9 @@ After writing all files, run these checks:
 
 4. **No `.toml` references deprecated envelopes:**
    ```bash
-   grep -E "STATUS: completed|STATUS: clarification_needed|SendMessage|shutdown_request" _bmad/custom/bmad-*.toml
+   grep -E "STATUS: completed|STATUS: clarification_needed|SendMessage|shutdown_request" _bmad/custom/bmad-*.toml | grep -vE "(do not|may NOT) .?SendMessage.? any agent"
    ```
-   Expected: zero matches.
+   Expected: zero matches. The containment text's own prohibitions — "do not SendMessage any agent" in every layer, "You may NOT `SendMessage` any agent" in the handoff — are filtered out; any other mention (an instruction to send, an envelope token) is a defect.
 
 5. **Each `.toml` loads `skill-rules.md` via `persistent_facts`:**
    ```bash
@@ -2288,6 +2321,7 @@ The workflow is ready to use. Projects can add custom rules to `_bmad/custom/ski
 
 - **Sequential run — safe at a story boundary.** Upgrade after a story's `committed` entry and before the next `stage_spawned` (or at any stage boundary with a clean tree and no spawn in flight — never while a `bmad-build-auto` / QA / code-review agent is running). The install commit lands on the epic branch (a chore commit under SC-3; it reaches the feature branch at the SC-4 merge). On the next `/epic-cycle` invocation resume does the rest: committed stories are skipped; sprint planning re-runs, so `ledger_load` runs; a story at `cr_complete` without `ledger_adjudicated` resumes at adjudication; an epic whose last story is committed but has no `ledger_burndown_*` entry runs the burn-down gate before `epic_status_done`.
 - **Ledger migration is not optional mid-epic.** `ledger_load` halts on a legacy-grammar ledger, so the Step 1 migration must be part of the upgrade commit. Migrated entries are triaged by class at migration (human-owned and product calls → `decision-pending`, story-closable → `routed owner=burndown`, non-two-way-door LOWs → `wontfix-accepted`); this epic's burn-down gate is therefore the first real drain of the story-closable backlog and may charter a burn-down story (bounded by `burndown_story_max`), and this epic's SC-4 decision sheet is the first time the `decision-pending` entries reach the user — budget for both.
+- **Upgrading to ≥ 2026-10-14.1 (BMAD 6.12.2; the v7 gate).** BMAD 6.12.2 is a drop-in: no skill text or `customize.toml` changed, so the derived overrides are identical; its helper scripts now write UTF-8 on Windows, and `install --yes` without `--directory` installs into the current directory — `npx bmad-method@6.12 install --action update --modules bmm --tools claude-code --yes` upgrades a project unattended. Its installer now advertises a BMAD v7 preview (`npx skills add bmad-code-org/BMAD-METHOD`, then `bmad setup`). Do not apply it to a project that runs these kits: v7 replaces the review layers, sprint planning and story files they drive, and from this version Step 1 and the command's pre-flight refuse it (BMAD-V7 / V7-GLOBAL). `ledger.sh` now refuses a status outside the Rule 15 grammar (`LEDGER_STATUS_CHECK=off` for a migration), reads a trailer's fields only up to its `note=`, and strips a caller's `note=` prefix; run `LEDGER load` after the upgrade — `status_unknown=` above 0 names entries an earlier typo hid from the status-based gates, and a project that patched these into its own copy can drop the patch. Parallel runs: `parallel.yaml` gains an optional `integrate_conflicts` (absent = `ask`, today's behaviour); a project whose own rule lets runners resolve plain-intent conflicts during integrate-forward sets `resolve-plain` and retires that override. Nothing else to migrate.
 - **Upgrading to ≥ 2026-10-10.1 (field report 2026-10-10; BMAD 6.12.1).** Safe at a story boundary. (1) Move every hand addition to the command or the overrides into `_bmad/custom/epic-cycle-overlay.md` before re-running the kit (Step 3c) — from now on they survive each upgrade. (2) The overrides are re-derived from the installed 6.12 `customize.toml` (`{diff_file}`, `{claims_file}`, the softened finding floor, the hermeticity brief); on BMAD 6.12.1, re-run BMAD's own installer first. (3) CI resolution point (1) moves to the next story's implement spawn; an in-flight epic picks it up at its next story. (4) New story-level entries `fresh_check` and `story_cycle`: a story committed before the upgrade is complete without them. Record the project's fresh-environment recipe under Project-specific rules if it has one; otherwise the check runs on a clean checkout. (5) Specs planned before the upgrade carry no `(loop)` / `(once)` marks and run their `## Verification` as before. (6) A project that wrote its own rules for what this version adds — read once, runtime targets, CI at the implement spawn, targeted tests, fresh-environment either-order checks, extend-don't-copy, prose discipline — retires the duplicates or keeps them under Project-specific rules where they say more. Nothing to migrate in the ledger: `LEDGER_ID_COUNTER` is used only when a parallel run sets it.
 - **Upgrading to ≥ 2026-10-08.2 (long runs fit the cap).** Rule 18 (5) names the foreground cap (10 minutes, `timeout: 600000` on every test or build call, 2 minutes by default) and the batching rule (one class per call, or batches sized from the project's recorded timings to about 8 minutes), and says that arming `Monitor` and stopping is a return; Rule 18 (3) no longer lets a suite that outlasts the cap run as one call. File 2 is re-derived (the handoff's containment clause changed). Specs already planned with one long `## Verification` command need no edit: the implement stage splits it under the new rule. A project that already moved its full suite to the lead or runner by its own rule keeps it — that is now option (b) of the documented verification arrangement (Per-Story Smoke); if its rules name a timings file, that file is the batching source. Nothing to migrate.
 - **Upgrading to ≥ 2026-10-08.1 (synchronous is stated).** Rule 18 gains item 5 — `run_in_background: false` on every `Agent` call at every depth, commands and tests in the foreground, no `Monitor` waits, no turn ended with work in flight — and the old item 5 (`ListAgents`) becomes item 6. File 2 / File 5 overrides are re-derived: transformation (d) puts the flag on every launch line, and the handoff's containment gains a foreground clause. A project that patched Rule 18 or its overrides by hand for the same purpose loses that patch to the overwrite and gets the kit's text in its place; move a project-specific incident note to "Project-specific rules" if it is worth keeping. Safe at a story boundary; nothing to migrate. Until the upgrade lands, an interim return is still handled by Rule 18 (4)'s orphan protocol.
