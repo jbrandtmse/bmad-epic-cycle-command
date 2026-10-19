@@ -1,6 +1,6 @@
 # Epic Cycle Workflow — Installation Kit
 
-**Kit-Version:** 2026-10-18.1
+**Kit-Version:** 2026-10-19.1
 
 **Requires BMAD Method 6.11.0–6.12.x, not v7** (`_bmad/_config/manifest.yaml` → `installation.version`; 6.12.2 recommended — its helper scripts write UTF-8 on Windows). BMAD v7, which the 6.12.2 installer advertises as a preview, replaces what this kit drives; Step 1 and the command's pre-flight refuse it. This kit drives the v6.11 Phase-4 chain — `bmad-sprint-planning → bmad-build-auto → bmad-code-review` — and its rendered skills need `uv` (Python 3.11+ provisioned by uv) on PATH. For BMAD ≤ 6.10 projects use the last pre-6.11 kit release; do not install this kit there.
 
@@ -16,6 +16,11 @@ A self-contained kit for installing the `/epic-cycle` slash command and its BMAD
 | `_bmad/custom/bmad-qa-generate-e2e-tests.toml` | Loads `skill-rules.md` for the QA skill |
 | `_bmad/custom/bmad-code-review.toml` | Loads `skill-rules.md` for the code-review skill |
 | `_bmad/scripts/ledger.sh` | Deferred-work ledger tool (bash + awk): the only reader/writer of `deferred-work.md` the pipeline uses — `load` / `slice` / `show` / `new` / `append` |
+| `_bmad/custom/epic-cycle-unattended.md` | Doctrine for `/epic-cycle --unattended` and `--review`, read only under those flags (kit-owned; overwritten on re-install) |
+| `_bmad/custom/unattended.yaml` | The unattended policy: what the loop may decide, what it parks for the owner, what stops it — project-owned, written from the template only when absent, never overwritten |
+| `_bmad/scripts/unattended-inbox.sh` | The owner's inbox for unattended runs (bash + awk): an append-only journal, the rendered `inbox.md`, the run lock, hold requests |
+| `.gitignore` | Gains `_bmad-output/unattended/` — the run state directory (inbox, run lock, resume prompts) stays out of git |
+| `.gitattributes` | Gains `_bmad/scripts/*.sh text eol=lf` — the kit's bash scripts stay LF in every checkout and worktree |
 | `.claude/commands/epic-cycle.md` | The slash command body (self-contained at runtime) |
 
 Removed by this kit version (they targeted the deprecated `bmad-create-story` / `bmad-dev-story` shims, which the pipeline no longer invokes): `_bmad/custom/bmad-create-story.toml`, `_bmad/custom/bmad-dev-story.toml` — backed up, then deleted in Step 1.
@@ -68,6 +73,11 @@ ls _bmad/custom/*-skill-rules.md _bmad/custom/skill-rules.md 2>/dev/null
 test -f _bmad-output/implementation-artifacts/deferred-work.md && echo "LEDGER-PRESENT" || echo "LEDGER-ABSENT"
 grep -c "^### DW-[0-9]*: " _bmad-output/implementation-artifacts/deferred-work.md 2>/dev/null   # 0 with the file present = legacy grammar
 grep -cE "^- \*\*\[|^## Deferred from:|^- source_spec:" _bmad-output/implementation-artifacts/deferred-work.md 2>/dev/null   # legacy entry shapes
+
+# 7. Unattended-mode files (Kit-Version >= 2026-10-19.1)?
+test -f _bmad/custom/unattended.yaml && echo "POLICY-PRESENT" || echo "POLICY-ABSENT"
+WB="$(sed -n 's/^worktree_base: *//p' _bmad/custom/parallel.yaml 2>/dev/null | sed 's/ *#.*//' | tr -d "\"'\r" | sed 's/[[:space:]]*$//')"; WB="${WB:-.worktrees}"
+ls _bmad-output/unattended/run.lock "$WB/.coordination/unattended/run.lock" 2>/dev/null   # any present = an unattended run (sequential, or parallel) may be live
 ```
 
 **Decision table:**
@@ -90,6 +100,8 @@ grep -cE "^- \*\*\[|^## Deferred from:|^- source_spec:" _bmad-output/implementat
 | `.toml` files present without `on_complete` | Back up each to `<file>.bak-<UTC>`, overwrite in Step 2. |
 | `.toml` files present with `on_complete` | Back up each, overwrite in Step 2 (the new versions omit `on_complete`). |
 | `_bmad/custom/skill-rules.md` present | Back up to `<file>.bak-<UTC>`. Before overwriting in Step 2, extract and PRESERVE: (a) the parallel kit's `## Rule 10` – `## Rule 12` blocks, re-inserted immediately before `## Rule 13` in the new file (so a parallel install is not silently un-installed); (b) everything under `## Project-specific rules` (rules numbered 21+ and any prose), re-appended verbatim. Report what was carried over. |
+| `POLICY-PRESENT` (check 7) | Keep `_bmad/custom/unattended.yaml` — it is project-owned. Report its `version:` and any top-level key the File 8 template has that it lacks, so the user can add it. |
+| A `run.lock` present (check 7) | Ask the user whether an unattended run is live (`bash _bmad/scripts/unattended-inbox.sh <its directory> run-status` shows its holder and heartbeat). If it is, stop: upgrade at a hold or after the run ends, never under a live run. |
 | `_bmad/custom/epic-cycle-overlay.md` present | Keep it — no kit writes it. Step 3c re-applies its entries after Steps 2–3b (command entries after the parallel kit's patches when that kit is installed). A project upgrading from a kit version without the overlay moves its hand additions to the command and the overrides into it first — once. |
 | `LEDGER-PRESENT` in legacy grammar (check 6: no `### DW-` headings but legacy shapes > 0) | Offer a one-time **ledger migration** (do it in a bookkeeping commit of its own, never mid-story): back up the file; for each legacy entry create a DW entry via `bash _bmad/scripts/ledger.sh <ledger> new …` carrying its summary, source, severity (default `med`), fix-risk (default `med`), footprint (default `out-of-footprint`), a one-line evidence digest, its LAST recorded status mapped onto the Rule 15 vocabulary (`deferred`/`open` → `open`; `wontfix` → `wontfix-accepted` with `reopen_if=unknown`; `resolved` → `resolved-by:<story or unknown>`), and an owner by class — **triage at migration, not later**: an entry only a human can close (a playtest, a measurement on hardware the pipeline lacks, an authored asset, a ratification) → `status=decision-pending owner=burndown note=human=<what>`; a product/preference call → `status=decision-pending owner=burndown`; story-closable work → `routed owner=<live story key, else burndown>`, except a LOW that is not a ≤15-line two-way door → `wontfix-accepted reopen_if=unknown` (Rule 15: `burndown` never owns a LOW). Report the class counts; the `decision-pending` entries reach the user at the first epic-close decision sheet (SC-4) and the next Story X.0, not at a burn-down story that cannot close them. Rename the backup to `deferred-work.legacy.md` (kept for forensics, never read by the pipeline). Report `total`/`open` before and after. A ledger with hundreds of entries is migrated by a spawned Sonnet subagent working from `grep -n` slices, never by loading the file into the lead. Declining the migration means the next epic's `ledger_load` gate will halt on the legacy file. |
 | Prior rules registry under a different name (e.g., `<project>-skill-rules.md`) | Rename to `skill-rules.md` after backing up, OR back up + delete (the new install creates `skill-rules.md` from scratch — manual merge if the prior registry had project-specific rules). |
@@ -165,7 +177,7 @@ Pure non-user-facing stories (build pipeline, internal tooling, refactor) are ex
 
 The closing summary is part of the agent's normal output. If the agent forgets the sections, the lead reconstructs the file list from `git status --short` — normal extraction.
 
-If the skill cannot make confident progress for ANY reason — ambiguous ACs, missing prerequisite, a user-preference choice, an environment failure, or anything risking a stated constraint — halt BEFORE the closing summary and end with a `## Clarification Needed` section instead. State the question, what was tried, and what's blocking, in one paragraph.
+If the skill cannot make confident progress for ANY reason — ambiguous ACs, missing prerequisite, a user-preference choice, an environment failure, or anything risking a stated constraint — halt BEFORE the closing summary and end with a `## Clarification Needed` section instead. State the question, what was tried, and what's blocking, in one paragraph. **Unattended runs** (`/epic-cycle --unattended`): your spawn prompt's `## Unattended run` block says which small preference choices you decide yourself and how to record them; everything else still ends here.
 
 Outside `/epic-cycle`, this rule does not apply — emit a normal completion summary.
 
@@ -179,7 +191,7 @@ If an NFR is found to be unmeasurable, mathematically impossible, internally con
 **Who decides the amendment.** The lead — in a parallel run, the epic-runner IS the lead for its epic, and its own epic's story blocks in `epics.md` plus everything under `implementation-artifacts` are always within its authority (Rule 11 governs concurrency between epics, not this). Two tiers:
 
 - **Apply and report** (no halt): an amendment that preserves the product promise — restating an observable or measurement so it is reachable/measurable while the intent is unchanged, correcting a wrong file/API/name the AC cites, and root-file bookkeeping another rule already mandates (an attribution row before a port lands, a shipped notices file kept consistent with `ATTRIBUTIONS.md`). Apply it under the discipline above and list it under `amendments:` in the story's `committed` entry (sequential) or the completion contract (runner) for post-hoc review.
-- **Ask first** (`## Clarification Needed` / intent-gap halt to the user): anything that changes what the product does — narrowing, dropping, or deferring an AC or scope to another story/epic; touching another epic's story blocks, epic boundaries, or dependency statements; a new third-party dependency or licence; a numeric target with product meaning. These are the decisions a human owns; "I verified it is unreachable" is the evidence for the question, not a licence to answer it.
+- **Ask first** (`## Clarification Needed` / intent-gap halt to the user): anything that changes what the product does — narrowing, dropping, or deferring an AC or scope to another story/epic; touching another epic's story blocks, epic boundaries, or dependency statements; a new third-party dependency or licence; a numeric target with product meaning. These are the decisions a human owns; "I verified it is unreachable" is the evidence for the question, not a licence to answer it. Under `--unattended` a stage still escalates them; the lead classifies them against the project's policy (`_bmad/custom/unattended.yaml`; doctrine U5).
 
 Either tier: if the amendment changes what an AD's Rule, a convention, or a Stack row says — or settles something the spine lists under `## Deferred` — the spine is updated in the same commit (Rule 20); a planning artifact that contradicts the spine is a conflict, not an amendment. If the amendment retitles a story, its sprint key changes: re-run `SPRINT_PLAN generate` with `--set <new key>=<the old key's status>` (generate drops the old key and would create the new one at `backlog`), then `LEDGER slice <old key>` → `append … owner=<new key> by=<gate> note=retitled` for every entry, in the same commit (Rule 17 (1)).
 
@@ -219,7 +231,7 @@ Interactive BMAD skills contain checkpoints — numbered menus, "halt and wait f
 
 - If the spawn prompt **pre-answers** a checkpoint, take the pre-answered option and continue without waiting for a human.
 - If a checkpoint is **not** pre-answered, it is a genuine decision point — stop and emit `## Clarification Needed` (Rule 4). Never guess, and never sit waiting for input that cannot arrive.
-- **Exception — `/bmad-retrospective`:** deliberately human-in-the-middle even under `/epic-cycle`. Its checkpoints, party-mode dialogue, and WAIT points are NEVER pre-answered, and it is never invoked with `-H` / `--headless`. It runs lead-side, so every elicitation reaches the user directly.
+- **Exception — `/bmad-retrospective`:** deliberately human-in-the-middle even under `/epic-cycle`. Its checkpoints, party-mode dialogue, and WAIT points are NEVER pre-answered, and it is never invoked with `-H` / `--headless`. It runs lead-side, so every elicitation reaches the user directly. The one exception to the exception: an `--unattended` run whose owner chose a headless retrospective in the project's policy (`gates.retrospective: headless`) runs it lead-side as `-H <epic>` and reads its verdict (doctrine U9).
 
 Outside `/epic-cycle`, checkpoints elicit the user normally.
 
@@ -243,7 +255,7 @@ Every review finding is dispositioned AT REVIEW TIME — fix, or close with a na
 
 | Finding | Disposition |
 | --- | --- |
-| HIGH | Fix now (rework loop, at any review while iterations remain). Sole exception: explicit user waiver via `## Clarification Needed`, logged `high_waived`. |
+| HIGH | Fix now (rework loop, at any review while iterations remain). Sole exception: explicit user waiver via `## Clarification Needed`, logged `high_waived` — under `--unattended` a waiver is owner-only: the story parks. |
 | MED, fix-risk ≤ med, **in-story** | Fix now — by the reviewer, in the review pass, whenever it can (it may edit files; the unattended menu applies every patch). What it cannot patch re-opens the story for the ONE bounded MED iteration (shared with the Fix Pack) if this is the story's first review; on a re-review it is `routed owner=<a later story key in this epic that touches the area, else burndown>` with its `DW-n:` bullet — never a second re-open (exit condition below). "The story that will touch it later" is still not a disposition: routing under this row is a named owner with a planned bullet (Rule 17 (1b)). |
 | MED, fix-risk ≤ med, **in-epic** (a file this story did not touch but a story of this epic owns) | `routed owner=<the story key in this epic that owns the file and has not yet reached cr_complete, else burndown>` with its `DW-n:` bullet now (Rule 17 (1b)) — that story's plan spawn receives it as inbox and its gate adjudicates it. Does not block story `done`. (Field report 2026-09-11: in-epic MEDs treated as fix-now were one of six rules that re-opened one story eight times.) |
 | MED, fix-risk high OR out-of-footprint | `escalated` — ledgered (`owner=burndown` is the grammar's parking slot, not a promise of work) and decided by the user at this epic's **decision sheet** (SC-4). Does not block story `done`. |
@@ -273,9 +285,9 @@ The body is written once. Everything after it is an append-only **trailer** of s
 
 ## Rule 16 — Clean tree before every `bmad-build-auto` dispatch (lead/runner, under `/epic-cycle`)
 
-`bmad-build-auto` requires a clean working tree at its step-01 version-control sanity check (HALT on a dirty tree / `version-control metadata not writable`) — that check runs on story-key and intent dispatches (the plan stage); a spec-path dispatch early-exits past it — and it commits only the reviewed-diff files at finalize, then verifies the whole tree is clean (HALT `finalization left repository dirty`). Either way, anything uncommitted when a dispatch starts ends the run. The lead's write-ahead bookkeeping (cycle log, `sprint-status.yaml`, `deferred-work.md`, a freshly planned spec, the epic-context cache, QA's test summary, saved patches) therefore MUST be committed before every dispatch: **write-ahead → bookkeeping commit → spawn.** Bookkeeping commits stage only `_bmad-output/implementation-artifacts/**` (cycle logs, `sprint-status.yaml`, `deferred-work.md`, `spec-*.md`, `epic-*-context.md`, `tests/test-summary.md`, `*.patch`), plus the planning decisions the same commit records — the planning folder's `epics.md` (story insertions, Rule 5 amendments) and the architecture spine's folder (`ARCHITECTURE-SPINE.md`, `.memlog.md`; Rule 20) — and `_bmad/custom/model-overrides.yaml` for a model-tier change — never `.vscode/settings.json`, never source files — land on the epic branch under the SC-3 assertion, and use a `chore(epic-N): bookkeeping <story-id> <stage>` message. This requires `_bmad-output/implementation-artifacts` to be **tracked** (not gitignored) in the project — the pre-flight checks it. A `blocked` result naming either condition above is a missed bookkeeping commit until proven otherwise — fix the tree, do not re-spawn blindly.
+`bmad-build-auto` requires a clean working tree at its step-01 version-control sanity check (HALT on a dirty tree / `version-control metadata not writable`) — that check runs on story-key and intent dispatches (the plan stage); a spec-path dispatch early-exits past it — and it commits only the reviewed-diff files at finalize, then verifies the whole tree is clean (HALT `finalization left repository dirty`). Either way, anything uncommitted when a dispatch starts ends the run. The lead's write-ahead bookkeeping (cycle log, `sprint-status.yaml`, `deferred-work.md`, a freshly planned spec, the epic-context cache, QA's test summary, saved patches) therefore MUST be committed before every dispatch: **write-ahead → bookkeeping commit → spawn.** Bookkeeping commits stage only `_bmad-output/implementation-artifacts/**` (cycle logs, `sprint-status.yaml`, `deferred-work.md`, `spec-*.md`, `epic-*-context.md`, `tests/test-summary.md`, `*.patch`), plus the planning decisions the same commit records — the planning folder's `epics.md` (story insertions, Rule 5 amendments) and the architecture spine's folder (`ARCHITECTURE-SPINE.md`, `.memlog.md`; Rule 20) — and `_bmad/custom/model-overrides.yaml` for a model-tier change — never `.vscode/settings.json`, never source files — land on the epic branch under the SC-3 assertion, and use a `chore(epic-N): bookkeeping <story-id> <stage>` message — committed with an explicit pathspec (`git add -- <paths> && git commit -m … -- <paths>`; the add because a pathspec commit refuses a path git does not know yet, such as a new spec or patch), never a bare `git commit`, so nothing else that happens to be staged rides along. This requires `_bmad-output/implementation-artifacts` to be **tracked** (not gitignored) in the project — the pre-flight checks it. A `blocked` result naming either condition above is a missed bookkeeping commit until proven otherwise — fix the tree, do not re-spawn blindly.
 
-**The one sanctioned source-file bookkeeping commit — the rework commit.** Before a rework re-dispatch (Rework Loop, Fix Pack, or a failed smoke that re-enters implement), QA's test files and the reviewer's applied patches are still uncommitted source changes (those spawns are forbidden to commit). The lead commits them together with the re-opened spec and the bookkeeping files as `chore(epic-N): rework <story-id> iteration <k>` on the epic branch (SC-3 assertion) so the tree is clean for the dispatch. That commit is part of the story's history, not a violation of this rule.
+**The one sanctioned source-file bookkeeping commit — the rework commit.** Before a rework re-dispatch (Rework Loop, Fix Pack, or a failed smoke that re-enters implement), QA's test files and the reviewer's applied patches are still uncommitted source changes (those spawns are forbidden to commit). The lead commits them together with the re-opened spec and the bookkeeping files as `chore(epic-N): rework <story-id> iteration <k>` on the epic branch (SC-3 assertion) so the tree is clean for the dispatch. That commit is part of the story's history, not a violation of this rule. Under `--unattended`, the doctrine's U4 adds two: a set-aside — one forward commit that restores a stopped story's source paths to its `story_base`, its changes saved as a patch — and a pick-up, the forward commit that applies that patch again once the owner has answered.
 
 ## Rule 17 — The drain is a stage, not a sentence (lead/runner, under `/epic-cycle`)
 
@@ -286,7 +298,7 @@ Every gate that files into the ledger is matched by a **logged stage that closes
 2. **Per-story adjudication** — `ledger_adjudicated`, mandatory between `cr_complete` and `smoke_complete`: every entry whose effective owner is this story's key is dispositioned against the story's DELIVERED scope (the diff since `story_base` — the baseline its first implement pass recorded, which no rework overwrites — and its tests), never its title — `resolved-by:<key>` with evidence, re-owned to a named story key with the residual restated in the note, or terminal. `ledger.sh slice <key>` reads empty before smoke.
 3. **Burn-down gate** — `ledger_burndown_complete|skipped`, mandatory after the epic's last `committed` and before `epic_status_done`. Its input is **story-closable work only**: the `routed`/`open` entries owned by `burndown` or by any of this epic's story keys. `escalated` and `decision-pending` entries are not work — they are counted (`to_decision_sheet=N`) and handed to the decision sheet (5), never re-owned or "decided" here. What remains is resolved or made terminal now, chartered into ONE burn-down story (**`N.<M+1>`, M = the highest existing story number under Epic N across BOTH `epics.md` and `sprint-status.yaml`** — the tracker can hold hotfix stories the epics file does not; gaps are irrelevant and `N.0` counts, so the number always sorts last and never collides. There is no conventional number: a fixed ninth-story number collided on every epic with nine or more stories, and "the next unused number" filled a gap below an existing story. An "Epic N burn-down" story that already exists — a resumed gate — is reused, never duplicated) of at most `burndown_story_max` entries (default 12) chosen by priority — severity, `occurrence=` count, low fix-risk first — that runs the full per-story pipeline before the epic closes, and the explicit **overflow** is re-owned to a SPECIFIC next-epic story key with the reason in the note and counted (`overflow=N`). "The next X.0" is not an owner; `burndown` ownership does not survive the gate. The gate reports the epic's drain ratio (`filed_this_epic` / `closed_this_epic`, from `LEDGER load` at `ledger_load` and now) so an under-sized drain is a number, not an inference.
 4. **Story X.0 is a CLOSE, not a relabel:** its outcomes are `resolved-by`, own (X.0 itself or a named story key in this epic), or terminal. "Defer with rationale" does not exist.
-5. **The epic-close decision sheet — `decision_sheet_recorded`, at the SC-4 merge gate.** Every `escalated` and `decision-pending` entry (any owner) is presented to the user in one sitting, each with a recommended disposition, and decided once: a product call becomes terminal or owned by a named story; a human-owned item (`note=human=`) moves to `sprint-status.yaml` `action_items` and closes `dropped note=action_item`. The human's decisions are written as trailer lines `by=merge_gate` — in the epic-branch checkout before the merge (sequential lead) or in the main checkout on the feature branch immediately after it (orchestrator; the ledger is union-merge, so ordering is irrelevant). A runner never decides these: it lists them under `decisions_for_user:` in its completion contract. This is the one place a human sees the ledger, and it is a gate the human already attends.
+5. **The epic-close decision sheet — `decision_sheet_recorded`, at the SC-4 merge gate.** Every `escalated` and `decision-pending` entry (any owner) is presented to the user in one sitting, each with a recommended disposition, and decided once: a product call becomes terminal or owned by a named story; a human-owned item (`note=human=`) moves to `sprint-status.yaml` `action_items` and closes `dropped note=action_item`. The human's decisions are written as trailer lines `by=merge_gate` — in the epic-branch checkout before the merge (sequential lead) or in the main checkout on the feature branch immediately after it (orchestrator; the ledger is union-merge, so ordering is irrelevant). A runner never decides these: it lists them under `decisions_for_user:` in its completion contract. This is the one place a human sees the ledger, and it is a gate the human already attends. Under `--unattended` the lead classifies each entry against the project's policy instead (doctrine U9): owner-only entries wait in the owner's inbox with the trailer `note=inbox=<id>`, and the decision sheet, the burn-down gate and X.0 skip them until the owner answers.
 
 Resume refuses `smoke_complete` without (2) for that story and refuses `epic_status_done` without (3) for that epic; SC-4 does not ask the merge question until (5) has been presented. Planning sees the load: `ledger_load` runs before sprint planning and its counts go into the sprint-planning argument and the retrospective's context. A rule that says "periodic burn-down" with no stage that executes it never runs.
 
@@ -319,7 +331,7 @@ The spine is the source of truth for architecture decisions, and the pipeline ma
 
 **Light path (default).** Add the next `AD-n` — ids ascend and are never reused or renumbered — with Binds / Prevents / Rule and `[ADOPTED]`; or amend an existing AD's Rule keeping its id; or add/edit a Conventions or Stack row; or move an item out of `## Deferred`. Then: `uv run --no-cache _bmad/scripts/memlog.py append --workspace <spine-dir> --type decision --text "<AD-n: what, and what it prevents>"` (the memlog is what `bmad-architecture` treats as the authority on what was decided); `uv run --no-cache .claude/skills/bmad-architecture/scripts/lint_spine.py --workspace <spine-dir>` and require `"ok": true` — it exits 0 even when it found no spine to lint (`"ok": false` with no findings) — HALTing on `"ok": false` or on any `ad_id` / `ad_fields` / `placeholder` finding; refresh the spine's `updated:`; cite the AD id in the ledger trailer line, `## Spec Change Log`, or clarification record; bookkeeping-commit. The spine is a planning artifact, so the epic-context pre-warm re-runs before the next plan spawn and the decision reaches every later story. Log `spine_updated ad=<AD-n|conv|stack|deferred> reason=<clarification|rule5|decision_sheet> by=<lead|runner>`. **No spine file** (`spine_resolved` found only a fallback `*architecture*.md`, or none): there is no memlog and nothing to lint — `memlog.py append` raises without an existing `.memlog.md`. Write the decision into the fallback document when there is one (else into the spec's `## Design Notes` and the ledger trailer), log `spine_updated … path=<file|none> lint=n/a`, and recommend `bmad-architecture` to the user at the epic's close.
 
-**Update intent (conflicts).** A decision that contradicts an existing AD is a re-architecture, not an amendment — never edit around it. Run `bmad-architecture`'s **Update** intent on the spine interactively (a human-in-the-middle run, like the retrospective) and let it resolve `conflicts_with_prior_decisions`; resume the pipeline only when the spine is `status: final` again and the pre-warm has re-run.
+**Update intent (conflicts).** A decision that contradicts an existing AD is a re-architecture, not an amendment — never edit around it. Run `bmad-architecture`'s **Update** intent on the spine interactively (a human-in-the-middle run, like the retrospective) and let it resolve `conflicts_with_prior_decisions`; resume the pipeline only when the spine is `status: final` again and the pre-warm has re-run. Under `--unattended`, the doctrine's U7 makes "contradicts" testable and chooses between comply, amend (a veto item) and stop.
 
 `decision-pending` entries with architectural weight are mirrored into the spine's `## Deferred` section with their DW id, so the spine also says what it has not decided yet. A spine written once and never updated is the failure mode BMAD's own docs warn about; a decision that lives only in a trailer line or a chat answer never reaches the next epic's plan stage (field case 2026-08-29: a licence decision and a tick-rate ratification recorded nowhere the plan stage reads).
 
@@ -776,6 +788,628 @@ case "$CMD" in
 esac
 ```
 
+### File 7: `_bmad/custom/epic-cycle-unattended.md` (verbatim; kit-owned)
+
+The doctrine for `/epic-cycle --unattended` and `--review`. The command reads it only under those flags, so attended runs carry none of it. A re-install overwrites it; project additions belong in the policy (File 8) or the overlay. Write the following content verbatim (FOUR-backtick fences: the file contains a three-backtick block):
+
+````markdown
+# `/epic-cycle --unattended` and `--review` — doctrine
+
+Kit-owned (written by `epic-cycle-workflow-creation.md`; a re-install overwrites it — project additions belong in `_bmad/custom/unattended.yaml` or the overlay). **Read this file in full when `/epic-cycle` is invoked with `--unattended` or `--review`, and again after every compaction.** Under those flags it overrides every passage of the command it names. Where it is silent, the command applies — except that inside the development loop any stop the command would put to the user is classified per U3 instead: an unattended loop never asks. An attended run reads it only for the case in U10's last bullet.
+
+Names used below:
+- **the policy** — `_bmad/custom/unattended.yaml` (project-owned; its categories are data). **This doctrine** — `_bmad/custom/epic-cycle-unattended.md`. In orchestrator mode both are read from the MAIN checkout (absolute paths), never from a worktree's copy.
+- **`<state>`** — the run state directory, outside git's view: `_bmad-output/unattended/` (sequential; gitignored by the kit) or `<worktree_base>/.coordination/unattended/` (orchestrator mode). Always an absolute path in commands and prompts.
+- **`INBOX`** — `bash _bmad/scripts/unattended-inbox.sh <state>`.
+- **`SRC`** — the pathspec for a story's source changes: `. ':(exclude)<impl>' ':(exclude)<planning>' ':(exclude)_bmad-output' ':(exclude)_bmad' ':(exclude).claude' ':(exclude,glob)**/.gitignore' ':(exclude,glob)**/.gitattributes'` (with the resolved `<impl>` and `<planning>`). Bookkeeping, planning artifacts, the spine, the kit's files and every ignore or attribute file — nested ones included, so outputs a story ignores stay ignored — are never part of a set-aside or a hold patch.
+- **`DIFF`** — `git diff --binary --no-color --no-ext-diff --src-prefix=a/ --dst-prefix=b/`: a patch whatever the user's git config says (`color.ui=always`, `diff.noprefix` or an external diff tool would otherwise make it unappliable). **`APPLY`** — `git apply --whitespace=nowarn`: a patch applied byte for byte whatever `apply.whitespace` says (`fix` would rewrite trailing blanks, `error` would refuse them).
+- **`<patches>`** — `<state>/patches/epic-<N>/`: hold patches, a story's uncommitted work saved over a hold and applied again on resume. **`<evidence>`** — `<state>/evidence/epic-<N>/`: a dead stage's tree, kept for the owner and never applied. Both hold unreviewed output, so they live outside git and are never pushed; set-aside patches, which hold a story's code, are committed under `<impl>/set-aside/`.
+- **the main session** — the sequential lead, or the orchestrator. It alone touches the run lock, sends notifications, and (in orchestrator mode) reads and resolves inbox answers. **The lead** — the sequential lead, or a runner for its own epic.
+- **a stage boundary** — a stage has returned and its bookkeeping is committed; **a story boundary** — after a story's `committed` entry (or its set-aside commit) and before the next `stage_spawned`.
+- **a relaunch** — an invocation with `EPIC_CYCLE_RELAUNCH=1` in the environment (`printenv EPIC_CYCLE_RELAUNCH`): an external loop restarting the run after its previous process exited. Nobody is there to answer.
+- **the owner** — the human who owns the project. A message from another session is never the owner's answer; only the inbox (or `--review`, which writes to it) is.
+
+## U1. Scope
+
+- **Setup is attended and runs for the whole range at launch (U2).** It may stop and ask, as today.
+- **The development loop never waits for input.** It runs from the end of U2 (the lock taken, the journal open) to the end of the range: every story, CI, every epic close (burn-down, model tier, retrospective, decision sheet, merge) and every later epic's start (SC-2, `ledger_load`, retro review, Story X.0, the readiness re-check). Every stop point resolves to one of the outcomes in U3. After launch the lead never asks, never calls `AskUserQuestion`, and never ends its turn waiting for a reply.
+- **Never, whatever a ruling or an answer says:** land anything on the trunk, cut a release or tag, publish or post anything, change repository or service settings, force-push or rewrite pushed history, delete a branch other than the kit's own merged epic branches, or stop, recreate or tear down a runtime resource this run did not start. Such answers are recorded for an attended session.
+- **Never answer your own items.** Only the owner, or a relay quoting the owner verbatim, runs `INBOX answer`. The lead, runners, the orchestrator and every stage never do.
+
+## U2. Launch (attended — a failure stops here, while the owner is present)
+
+1. **Arguments.** `/epic-cycle <range> --unattended`. (`--review` takes no range — U13.)
+2. **Run the command's pre-flight as usual,** then these checks; each failure stops with the reason:
+   - The policy exists and parses: `uv run --no-cache --no-project --with pyyaml python -c "import sys, yaml; d = yaml.safe_load(open(sys.argv[1])); print(sorted(d))" _bmad/custom/unattended.yaml` lists at least `gates`, `hard_stops`, `limits`, `owner_only`, `veto_window`. (`--no-project`: never let uv resolve or lock the project's own Python dependencies.)
+   - **Permission mode:** ask the owner to confirm the session runs in `bypassPermissions` (or `auto`) mode — the agent cannot reliably detect it, and one permission prompt stalls the loop. Log `permission_mode_attested mode=<…>`. Asked at every interactive launch; a relaunch reuses this run's logged attestation (its command line carries the mode).
+   - **Session type:** an interactive session (terminal, IDE, desktop), or a relaunch under `claude -p`. A `claude -p` parallel run needs `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0`.
+   - **CI mode.** If the pre-flight found `ci=none` or `ci=unavailable` and the policy's `ci.without_ci` is empty, ask the owner: `local_green` (merge on the full suite plus the smoke) or `hold` (merges wait; a sequential run then ends at the first epic close). Log `ci_mode_chosen without_ci=<…>`.
+   - **Repository visibility:** `gh repo view --json visibility -q .visibility` (or ask); log it. On a public repository, pushing the epic branch is routine; a secret in anything pushed is a security incident (U3).
+   - **Push notifications:** check whether a push-notification tool is available to this session (Claude Code's `PushNotification`, loaded with `ToolSearch` if deferred). If not, log `notify_unavailable` — the inbox alone carries the items.
+   - **The run lock:** `INBOX run-status`. `none` → continue. A lock (exit 3) names a run id, holder and heartbeat age:
+     - this run's id and a relaunch → the previous process exited: take the lock over at step 4;
+     - otherwise ask the owner whether that session is still running — yes → stop (never two sessions on one run); no → take it over at step 4 with reason `owner-confirmed: <what they said>`. A relaunch that finds another run's lock stops.
+   - A `<state>/HOLD`: a fresh launch clears one left by an earlier run (`INBOX hold-clear "fresh launch"`). A resume follows U11 — an interactive re-invocation clears it; a relaunch clears only a usage hold and honours any other.
+   - **Orchestrator mode only:** the dependency graph is approved and its hash current.
+3. **Setup for the whole range.**
+   - Sequential: run the first epic's start as the command orders it (Task Sequence, per-epic steps 1–6), with every attended stop. For each later epic in the range, run headless sprint planning once now and read its readiness `gate`: resolve a FAIL or `blocked` with the owner now. Later epics' X.0 and retro review run in the loop (U8).
+   - Orchestrator mode: the orchestrator's own launch work (graph approval, spine and ledger counters) plus headless sprint planning for every epic in the range in the main checkout, resolving FAIL or `blocked` with the owner now. Every epic start a runner performs after dispatch is loop work (U8).
+4. **Start the run:** `INBOX init <run-id>` (`<run-id>` = `<UTC as YYYYMMDDTHHMMZ>-<range>`, or the logged id when resuming); take the lock — `INBOX run-start <run-id> lead` (sequential) or `… orchestrator`, or `INBOX run-takeover <run-id> <holder> "<reason>"` per step 2. Both print `token=<t>`: log it (`lock_token=`, on `unattended_started` / `unattended_resumed`) and pass it to every later `run-boundary` and `run-end`. (`run-start` exits 3 when a lock exists; `run-takeover` exits 1 on another run's lock without the owner's confirmation.) A `run-boundary` or `run-end` refused with exit 4 means another session has taken this run over: stop at once, writing nothing more. Log `unattended_started run=<id> policy=<git hash-object of the policy> doctrine=<git hash-object of this doctrine> range=<range> ci=<mode> visibility=<…> notify=<push|inbox-only>`; write the first resume prompt (U11). From here on, the loop runs unattended.
+
+## U3. Outcomes and classification
+
+| Outcome | Meaning | Record |
+|---|---|---|
+| **decide** | Rule using the policy's `product_defaults`, the spine and the rules; continue | `ruling … category=decide` (log and run report only — never the inbox) |
+| **veto** | Decide now; the owner may reverse before the next release | `ruling … category=veto reversal=<what undoing it takes>`; `INBOX add veto …` |
+| **park** | Only on an explicit `owner_only` match: the unit waits, independent work continues (U10) | `story_parked` (or the ledger marker, U9); `INBOX add parked …`; push |
+| **stop** | The unit cannot proceed but nothing owner-only is at stake: stop the smallest unit that contains it (story, epic, slot or run) | `unattended_stop unit=<…> reason=<…>`; `INBOX add stopped …` (options for `--review`); push |
+| **hold** | Finish the current stage, record everything, end cleanly (U11) | `hold_ordered`, `hold_complete`; push |
+
+**Classify** a question by comparing it against the policy's `hard_stops` first, then `owner_only`, then `veto_window`; anything else is **decide**.
+- **Park only on an explicit `owner_only` match.** Ambiguity between decide and veto resolves to **veto**, never to park.
+- A security incident is checked first: a secret in a commit, log, trace or any printed output, a push to any remote other than `origin`, or a visibility change → stop the affected unit, never rewrite history, notify at once.
+- Every other blocker is a **stop** of the smallest unit that contains it.
+- A `ruling` line names the question, the choice, the rejected options and why, the category, and `policy=<hash>`. Commit subjects name a ruling that changed files.
+- `INBOX add` reuses an open `parked`, `stopped`, `held-merge` or `retro` item for the same unit (`U-n EXISTS`); `veto`, `hold` and `report` items are always added. So a resume never re-adds a veto: each `ruling … category=veto` line records its `inbox=U-n`, and a ruling already logged is not added again.
+
+**`limits`** (from the policy): `clarification_rounds` per stage per story; `split_children` per original story; `fix_forward_per_cause` per first-red sha; `gap_fill_per_epic`; `veto_open_max` open veto items (at the limit, merges to the feature branch are held until `--review`); `unverified_stories` during a CI outage. Passing a limit is a stop of that unit.
+
+**Integrity at every story boundary:** `git hash-object` the policy and this doctrine (the main checkout's copies). A hash that differs from the last `unattended_started` / `unattended_resumed` entry, with no resume in between, stops the run: an agent edited the rules mid-run. The owner changes the policy during a hold and commits it (sequential: on the branch the checkout is on; orchestrator mode: in the main checkout); the resume logs the new hash. Anything under `_bmad/` and `.claude/` is `owner_only` except the kit's own run writes (`_bmad/custom/epic-dependencies.yaml` hash re-records; `_bmad/custom/model-overrides.yaml` for the mandatory rollback).
+
+## U4. Setting a story aside, and picking it up again
+
+A story that parks or stops **after its implement stage has produced code** is set aside, so its code never sits under later work. **`story_base`** is the latest `story_base=` logged for the story: on its first implement `stage_spawned` (the command logs it there and on the first `dev_complete`), on its first implement spawn after a set-aside or a re-plan, and at every pick-up.
+
+**Set aside only when it is safe; otherwise stop the epic instead** (with an inbox item, and nothing restored):
+- another story's commit sits on top of the story's own — a story whose `committed` sha descends from `story_base` (for example a successor stacked during a CI outage);
+- the story changed a submodule (`git diff --no-ext-diff --no-color --submodule=short --ignore-submodules=none <story_base> -- SRC` shows a `Subproject commit` change, or `git status --porcelain --ignore-submodules=none` shows a submodule dirty — `--ignore-submodules=none` because a `.gitmodules` `ignore =` setting would hide both): submodule stories are not set aside;
+- `story_base` does not resolve (`git rev-parse --verify <story_base>^{commit}` fails);
+- an untracked file outside `SRC`'s exclusions that no stage reported (step 2).
+
+**Steps:**
+1. `mkdir -p <impl>/set-aside`. The patch is `<impl>/set-aside/<story>-<n>.patch`, `<n>` one past the story's existing patches.
+2. Intent-to-add only the untracked files the story's stages reported adding (QA's `## Tests Added`, the review's `## Files Modified`): `git add -N -- <path>`, one call per path that exists (a reported path that is gone is skipped). Then `git status --porcelain --ignore-submodules=none -- SRC` must show no `??` — any other untracked file (a stage's scratch output, a report, an env file) stops the epic and is listed in the inbox; it is never patched or committed.
+3. `DIFF <story_base> -- SRC > <patch>` — it must exit 0 (a failing diff is not an empty patch: stop the epic). An empty patch means nothing to take off: skip to step 5 — and if `bmad-build-auto` had already reverted the code and saved its own patch (a review-step intent gap, named in the spec's `## Review Triage Log`), log that patch's path on `story_set_aside`; the pick-up applies it through the re-dispatch protocol's review-step patch path. Otherwise `APPLY -R --check <patch>` must exit 0 — if not, stop the epic and restore nothing.
+4. `git restore --source=<story_base> --staged --worktree -- SRC`. Check that the index now equals `story_base` on `SRC` (`git diff --cached --quiet <story_base> -- SRC`), that the tree matches the index (`git diff --quiet -- SRC`), and that `git ls-files --others --exclude-standard -- SRC` prints nothing. If not, put the work back (`APPLY --index <patch>` — it applies exactly onto the restored state) and stop the epic. If the put-back fails too (a file the OS would not release), commit the patch alone — `git add -- <patch> && git commit -m "chore(epic-N): save <story> patch" -- <patch>`, a pathspec commit, so the half-restored tree stays out — stop the epic, and list the tree's state in the inbox item.
+5. Set the spec `status: ready-for-dev` and `SPRINT_PLAN generate --set <key>=ready-for-dev` (with the rework re-open, the only sanctioned downgrades). Commit: `git add -u -- SRC`; the story's ignore and attribute changes, which stay in force — `git add -u -- <path>` for each file `git diff --no-color --name-only -- ':(glob)**/.gitignore' ':(glob)**/.gitattributes'` lists (a `git add` pathspec that matches nothing would fail); then `git add` the patch and the bookkeeping files by path — never an untracked source file — and `git commit -m "chore(epic-N): set aside <story> (<U-id or reason>)"`. A forward commit, never a reset, so it is safe whether or not the story was pushed; it is Rule 16's second sanctioned source-file commit. Log `story_set_aside story=<key> patch=<path> sha=<commit>`. The story's inbox item also lists its planning changes, which stay in force (`git diff --name-only <story_base> -- <planning>`).
+6. If the story had been pushed, push the set-aside commit and resolve CI for it like any head: green continues; red stops the epic.
+
+**Picking it up again** (when its answer is applied — U10), only at a story boundary with a clean source tree and nothing staged (`git status --porcelain --ignore-submodules=none -- SRC` prints nothing and `git diff --cached --quiet` exits 0; if not, stop the epic — never reset over work). An empty patch has nothing to apply: re-implement the story from its spec, or, if `story_set_aside` named build-auto's own saved patch, take the re-dispatch protocol's review-step patch path with that patch.
+1. `APPLY --3way <the story's latest patch>` on the current head. Judge by the exit code only: git 2.34 prints `does not exist in index` for new files on a clean apply.
+2. Exit 0 → commit what the apply staged, at once, with a bare commit: `git commit -m "chore(epic-N): pick up <story> (<U-id>)"` (nothing else is staged — the gate checked; a pathspec commit would re-read modes from the tree and drop executable bits where `core.fileMode=false`). It is Rule 16's third sanctioned source-file commit, a forward commit like the set-aside: from here on, a crash, a hold or a dead stage can no longer lose the picked-up code. Log `story_unparked story=<key> via=<inbox|review> story_base=<the commit before the pick-up commit> sha=<the pick-up commit>`; set the spec `status: in-review`, its `baseline_revision` (and `baseline_commit`) to that `story_base`, so review sees the whole story, and `review_loop_iteration: 0` (build-auto would otherwise halt at its first loopback on the count that set the story aside; the kit's own rework count still continues); `SPRINT_PLAN generate --set <key>=in-progress`. Then dispatch build-auto on the spec — a spec-path dispatch resumes at review, as the re-dispatch protocol's review-step path does, with nothing left to apply — or continue at the stage the answer calls for.
+3. Exit ≠ 0 → `git restore --source=HEAD --staged --worktree -- SRC` (source paths only — the bookkeeping not yet committed, an answer just applied among it, stays), re-plan the story (`status: draft`, `review_loop_iteration: 0`), and keep the patch for reference.
+
+A story parked **before** implement (at plan or spec validation) has no code: log `story_parked` and move on; its spec waits as it is. When it parked on an undecided ledger entry (a decision dependency), its inbox item's unit is that entry (`DW-<n>`, which also gets the `note=inbox=<U-id>` trailer), so one answer decides the entry — closed `by=owner` — and releases the story, which resumes at spec validation.
+
+## U5. The loop's stop points
+
+Each row overrides the command passage it names.
+
+**Waiting** — for CI, a rerun, or a queued run — is a bounded poll in one foreground call that ends inside the 10-minute cap, repeated while the run is still going: `for i in 1 2 3 4 5 6 7 8; do s="$(gh run view <id> --json status -q .status)"; [ "$s" = completed ] && break; sleep 60; done` (`gh run watch` blocks until the run ends, so it can outlive the cap). Never `Monitor`: the lead's turn never ends with something in flight. (The orchestrator keeps waiting on runner notifications, as today.)
+
+**Stage results**
+- **`## Clarification Needed`** from a stage, or a build-auto clarification HALT (Clarification protocol, Handling Clarifications): classify (U3). Decide or veto → write the ruling into the spec (`## Design Notes`, committed — Rule 16) and re-spawn through the re-dispatch protocol; owner-only → park. At most `limits.clarification_rounds` rounds per stage per story; then stop the story. Pipeline or environment defects (dirty tree, no subagents, a failed pre-warm) are fixed, never "answered".
+- **Build-auto non-convergence** (`review repair loop exceeded`, `implementation verification failed`, `patch verification failed`, `matrix test audit failed`, `handoff conflicts with spec`): as the rework cap.
+- **Rework cap reached** (Rework Loop): stop the story and set it aside (U4). No cap override unattended: an owner's "override" answer is logged `rework_cap_override … authorized_by=owner via=<inbox|review> items=<the answer's finite list>`. CI and smoke reworks count toward the cap, and a picked-up story's count continues where it stopped.
+- **A HIGH the review asks to waive** (Rule 15): owner-only — park, and set the story aside.
+- **Rule 5 tier-2 amendment:** a split into siblings planned next in the same epic, within `limits.split_children`, is decide. Moving an AC to a not-yet-planned story inside the release a `milestones` entry defines is veto (never an AC a release gate, milestone or end-to-end acceptance test depends on). Dropping or deferring scope out of the release, moving an AC when no milestone defines the release, a product number, an epic boundary or a dependency statement → park. Adding an AC to another epic's not-yet-planned story is veto (orchestrator mode: the orchestrator rules it).
+- **Decision dependency at spec validation** (the command's "an intent gap for the user NOW"): rule the undecided item if its category allows; otherwise park the story.
+- **Missing Integration AC at spec validation:** option (a), re-plan, once. Still missing: option (b) only if a later story of this epic is named as its consumer; otherwise stop the story. Never option (c).
+- **A destructive check with nowhere disposable to run it:** stop the story (a tooling need).
+- **Epic-context compilation fails:** retry once; then stop the epic.
+- **AD conflict:** U7.
+- **Smoke, fresh-check or AD-tooled verification failure:** the rework path (option b).
+- **Orphan writer or protocol violation** (Rule 18): the orphan protocol, `protocol_violation`; a live writer that cannot be stopped stops that epic (or slot).
+- **Stage API error:** rate limit or overload → the existing backoff with the retry watchdog. Usage or spend limit → a usage hold (U11) if the lead can still act — the stage the limit cut off is dead: its tree is saved as evidence and logged `stage_dead` with the stage to re-run from (U11) — otherwise the session ends, and the resume prompt from the last story boundary carries the run.
+- **Model-tier checkpoint:** evaluate and log; offers are recorded, never applied (`gates.model_tier: record_only`). The mandatory mixed-tier rollback still applies.
+
+**CI** ("CI Is a Gate")
+- **Red on the story just committed:** the rework path. Unfixable within the cap → stop the story and set it aside (U4).
+- **Red matching a ledgered flake:** one rerun and an `occurrence=` bump; green continues, red takes the rework path.
+- **Infrastructure reds:** re-run the workflow (`gh run rerun <id>`) and watch it — the run's own duration paces the retries. Three infrastructure reds in a row, or a run still queued past `ci.queue_minutes` (counted from the push's log entry), → the CI outage rule: resolution point 1 is relaxed for at most `limits.unverified_stories` story — its successor may be committed locally, unpushed. When CI returns, push the stacked heads one at a time, oldest first, resolving each before the next push, so a red is charged to the right story. Blocked past `ci.blocked_hours` → stop the epic. (A red on a story with a stacked successor stops the epic — U4 never sets it aside.)
+- **Inherited red:** rerun once. Then one fix-forward story per root cause (keyed by the first red sha, `limits.fix_forward_per_cause`), only if the failing code lies in this epic's own changes (`git diff --name-only <feature>...HEAD`); it is a veto item. Otherwise, or after that, stop the epic.
+- **CI unavailable at the merge gate** (SC-4's "ask the user to confirm CI by hand"): as chosen at launch — merge on local green, or hold the merge.
+
+**Epic start and close** — U8 and U9, including X.0's "batched to the user in one sitting", the decision sheet, SC-4's merge question and "Resume across the end-of-epic gates" ("re-asking … is correct") — none of them asks.
+
+**Workspace and resume**
+- **SC-7 (unsure where to commit):** stop the run.
+- **Integrity checks, divergence, ambiguous liveness** (Resume Semantics): stop that epic.
+- **Resume:** U11's unattended resume semantics.
+- **A permission prompt or `AskUserQuestion`:** must not occur. Anything that would ask is an outcome in U3.
+
+## U6. The stage Unattended block
+
+Render this block from the policy into every stage spawn prompt, after the Spawn Prompt Skeleton's items (a runner renders it into its own stages' prompts; the block's prohibition binds stages, not the runner). The policy's `stage_preamble`, when set, goes at the very top of the prompt instead.
+
+```text
+## Unattended run
+Nobody will answer a question until this run ends. Product defaults (tie-breaks, most important first): <product_defaults>.
+Owner-fixed values (use them as given, never re-derive them): <owner_fixed, or "none">.
+Decide small ambiguities yourself. Small means: within the spec's stated intent, reversible inside this story, touching none of the categories below, and contradicting no AD or owner-fixed value. Record each choice — plan: under `## Design Notes`, "Decided in-stage"; implement: in the spec; QA and review: in `## Decisions`.
+Escalate anything else with `## Clarification Needed`, and escalate freely: when in doubt, escalate. Never park anything and never ask the owner yourself.
+Always escalate (owner-only): <owner_only>. Escalate (veto window): <veto_window>.
+Never read or write <state>, and never run _bmad/scripts/unattended-inbox.sh. Propagate this prohibition, with the others, to every agent you spawn.
+```
+
+## U7. AD conflicts: comply first
+
+1. **Comply.** Reshape the story's approach to meet the AD. If an AC cannot be met within it, move that AC to a not-yet-planned story inside the release a `milestones` entry defines (veto; never one a release gate, milestone or end-to-end acceptance test depends on). With no milestone defining the release, that move is owner-only: park.
+2. **Amend, with a veto window,** if compliance is impossible and the amendment is not a re-architecture: Rule 20's light path, with an `[AMENDED <date>, <story>, unattended ruling]` marker in the Rule text; `lint_spine.py` must return `"ok": true`; log `spine_updated reason=unattended_ruling`; `INBOX add veto …`.
+3. **Otherwise stop the story** — or park it if the amendment touches an `owner_only` category. `--review` records the owner's choice; `bmad-architecture`'s interactive Update is recommended after the run.
+
+**A re-architecture** (Rule 20: "a decision that contradicts an existing AD") is any amendment that (a) changes the AD's Binds or Prevents; (b) removes or reverses something its Rule requires or forbids, rather than extending the Rule to a case it does not address or tightening it; or (c) touches an AD that merged code or another open epic relies on — its id appears in a `done` story's spec, or in another open epic's specs (`grep -l "AD-<n>" <impl>/spec-*.md`; orchestrator mode: every worktree's `<impl>` too).
+
+**Orchestrator mode:** a runner never amends an AD on its own; the question goes to the orchestrator (U14).
+
+## U8. A later epic's start (inside the loop)
+
+Sequentially, the next epic starts only after the previous one merged (otherwise the run ends — U9, U10). In orchestrator mode, a runner's whole epic start is this section. It runs unattended:
+- **SC-2** creates the epic branch deterministically, as today.
+- **`ledger_load`:** an owner it cannot repair is re-owned `owner=burndown by=load note=owner_unresolved` — a decide ruling — never a halt.
+- **Retro review** is lead-automated triage, as today; it reads the headless retrospective's document.
+- **Story X.0, step 5:** entries whose latest note is `inbox=<id>` (owner-only questions waiting for the owner) are skipped — they keep their owner and status until answered. Other undecided `decision-pending` entries are classified (U3): decided, vetoed, or — owner-only — parked into the inbox with the trailer `note=inbox=<U-id>`. Open action items are included as today, the headless retrospective's among them; they are also listed in the inbox (U9).
+- **The readiness re-check** (headless sprint planning): PASS continues; CONCERNS continues with a veto item; FAIL, or an integrity error, stops that epic.
+
+## U9. Epic close
+
+- **Burn-down gate:** unchanged; it needs no human.
+- **Retrospective:** `/bmad-retrospective -H <epic>` via the `Skill` tool, lead-side (`gates.retrospective: headless`; `skip` → log `epic_retro_skipped reason=policy`) — sequential: where the command runs it; orchestrator mode: by the runner, after its burn-down gate and before its integrate-forward (U14). Headless, it writes the retrospective document (`headless: true` in its frontmatter, an Assumptions section, an acceptance verdict), marks the retro key `done` (meaning "the retrospective ran"), and appends its proposed action items as `open`; it does not change earlier action items' status. Commit its outputs (bookkeeping). Read `verdict` from the document's frontmatter: `rejected` holds the merge (`INBOX add held-merge …`); `accepted` and `accepted-with-open-items` continue. Add `INBOX add retro "Epic <N>" "<verdict; n findings; new action items>" …` so the owner can drop items through `--review`. Log `epic_retro_complete mode=headless verdict=<…>`.
+- **Decision sheet** (Rule 17 (5)): classify each `escalated` / `decision-pending` entry (U3). Owner-only → `INBOX add parked "DW-<n>" …` and the trailer `status=decision-pending owner=burndown by=unattended note=inbox=<U-id>`; the decision sheet, the burn-down gate and X.0 skip entries whose latest note is `inbox=…`. Veto → decided with `by=unattended` plus a veto item. The rest → decided `by=unattended`. Human-only entries (`note=human=`) move to `action_items` as today. Log `decision_sheet_recorded … by=unattended`.
+- **Merge to the feature branch** (`gates.merge_to_feature: when_green`; SC-4 asks nothing). All must hold: every story `done`, none parked or set aside (a dropped story — `story_dropped`, U10 — is closed); the burn-down gate logged; a verdict that is not `rejected` (or the retrospective skipped by policy); the decision sheet recorded; fewer than `limits.veto_open_max` open veto items. Then:
+  1. **Integrate forward first** if `origin/<feature>` is not an ancestor of the epic head: merge it into the epic branch; resolve conflicts per `gates.merge_conflicts` (`resolve`: plain unions — both sides kept, no behaviour choice — are decided; behaviour choices are ruled as veto items; code an AD governs goes through U7; an `owner_only` match parks; an unclassifiable conflict holds the merge. `ask`: any conflict holds the merge). Run the full suite and the smoke on the merged tree, push, and require CI green on that exact head.
+  2. **Merge** (SC-4, now conflict-free): the `epic_merge_started` marker, the merge, the push, the branch deletes, verification on origin, the record commit — which also carries a copy of `inbox.md` as `<impl>/unattended-inbox-snapshot.md`, so the owner's decisions live in git.
+  3. **Resolve CI for the new feature head.** Flake or infrastructure → retried. A story red → no new epic starts: a sequential run ends with its report.
+
+  Any condition failing holds the epic unmerged (`INBOX add held-merge …`). A sequential run then ends with its report (the next epic needs this one merged); in orchestrator mode, dependants wait and independent epics continue. A held merge is released by the owner's answer (through the inbox or `--review`): the run merges at its next story boundary, or first thing when it is next launched.
+- **Final epic of the range:** the ledger sweep is classified like the decision sheet; the residue goes into the run report.
+
+## U10. Park, stop and continue
+
+- A parked or stopped story is logged and gets an inbox item; if it has code, it is set aside (U4). It gets no ledger entry: the log, the inbox and the tracker carry it.
+- **Take the next independent story** in epic order. A story is *not* independent if `epics.md` dependency statements, its `Consumes:` list, or its acceptance criteria name a parked, stopped or waiting story; if it is a split sibling of one (split children depend on parked siblings by default); or if its own plan stage, told which stories are parked, escalates because it needs one.
+- **If no story in the epic is independent:** with `gates.gap_fill: burndown`, take a story named for this epic in `gates.gap_fill_stories`, or charter a gap-fill cleanup story from closable ledger entries owned by this epic (Rule 17's chartering rules; titled "Epic N gap-fill", numbered like any inserted story, never reused as the burn-down story), at most `limits.gap_fill_per_epic`. Failing that: a sequential run ends as `stopped: remaining work blocked` with its report — it never moves to another epic while this one is blocked, and never sits waiting. A runner ends with `## Epic Runner Ended reason=parked` (U14).
+- **Picking up answers** — the main session (orchestrator mode: U14), at every story boundary, and at every launch or resume before it computes the resume point — unless a story is mid-pipeline (an open `stage_spawned`; a story whose latest anchor is past `story_created` but is not `committed`, `story_set_aside`, `story_parked`, `story_dropped` or a stop of it; a hold patch under `<patches>`; or a dirty source tree): then that story is finished first and the answers are applied at the next story boundary. `INBOX answers`; for each (`U-n`, `answer_ref`, by, via, answer, quote): if `owner_decision id=<U-id> at=<answer_ref>` is already logged, the session that logged it may have died before applying it — if its effect is in place (a `story_unparked` — or its pick-up commit, which a crash may have left unlogged: log `story_unparked` then — the merge record, the ledger line), only resolve; if not, apply it now without logging it again; never apply twice. Otherwise log `owner_decision id=<U-id> at=<answer_ref> via=<inbox|review> by=<who>` with the answer (and the quote, for a relay) FIRST, then apply it — un-park through U4's pick-up, re-plan (spec `status: draft`, `review_loop_iteration: 0`), reverse a veto ruling (as a routed ledger entry or a fix story), merge a held epic (U9), close a ledger question with `by=owner`, approve a graph change, or change a retrospective's action items (`uv run --no-cache .claude/skills/bmad-retrospective/scripts/sprint_status.py update --file <impl>/sprint-status.yaml --epic <N> --set-action-status '[{"id":"<id>","status":"<open|in-progress|done>"}]'` for the transitions the owner confirmed; a dropped item is set `done`, the drop noted in the log — the script knows no other status) — then `INBOX resolve <U-id> lead <answer_ref> "<sha or note>"` (a refusal saying "already resolved" means `--review` resolved it first: fine). The script refuses a stale `answer_ref`, so an answer that arrived meanwhile is applied too, never dropped. An answer that would act outward (U1's never-list) is recorded, not executed. **Order:** answers that need no clean tree first (ledger questions, vetoes, action items, re-plans), then held merges, then at most one pick-up — the earliest story in epic order. A pick-up leaves its story mid-pipeline, so further un-park answers stay unlogged until the next story boundary. "Drop this story" (scope removal — owner-only) means: remove its block from `epics.md`, `SPRINT_PLAN generate`, record its delivered work and its set-aside patch in a ledger entry, log `story_dropped story=<key> id=<U-id>`, and resolve. `story_dropped` is a terminal anchor: the resume point, U9's merge condition and the attended check below count the story as closed.
+- **An attended run after an unattended one:** if the log holds `story_set_aside` or `story_parked` entries without a later `story_unparked` or `story_dropped`, or `<patches>` holds patches, the attended lead reads U4, U10 and U11 before resuming. It takes the run lock for its duration (`INBOX run-start attended-<UTC> attended`, released with `run-end` at its end), so a relaunch loop cannot join; it applies hold patches at their story's resume point (U11) and picks parked stories up with the owner, never re-implementing a set-aside story over its patch; it records each owner's answer through the script (`--by owner --via attended`), logs `owner_decision`, and resolves the item. A dead run's lock is released by the owner: `INBOX run-takeover <its id> owner "owner-confirmed: <what they said>"`, then `INBOX run-end <its id> <the printed token> "released"`.
+
+## U11. Hold and resume
+
+**Triggers** (checked at every stage boundary, and at launch): `<state>/HOLD` exists (`INBOX hold "<reason>"`); the first usage warning the session can see; a usage- or spend-limit error the lead can still act on; the policy's `hold.at` (a clock time — never honoured when it is earlier than the run lock's `started`: the run's start or the owner's latest resume, which a relaunch keeps) or `hold.after_hours` (counted from the same `started`). Quota itself is mostly invisible to the agent, hence the owner-set times. A hold the run orders itself is written `INBOX hold "auto: usage <what it saw>"` or `INBOX hold "auto: time <hold.at|hold.after_hours>"`; one the owner orders has any other reason. The script never lets a weaker hold replace a stronger one (the owner's, then a time hold, then a usage hold).
+
+**Steps** — a hold never interrupts a stage, however long it runs:
+1. Log `hold_ordered reason=<…>`; start no new stage.
+2. When the running stage returns, do its normal bookkeeping. A stage a usage or spend limit cut off did not finish: its tree is a dead stage's, saved as the resume rule below says (`stage_dead`), never as a hold patch. Otherwise the story's work that is still uncommitted by design (QA's tests, review patches — every stage's since the story's last commit) is saved outside git and taken out of the tree, and the save is logged `hold_saved story=<key> stage=<stage> patch=<path|none> tree=<clean|in_place|partial|submodule>` — the resume acts on it. If the work touches a submodule (`git status --porcelain --ignore-submodules=none` shows one dirty), leave it in place (`tree=submodule`) and record it in the hold report; the resume stops that epic. Otherwise: `mkdir -p <patches>`; `git add -N -- SRC` (every untracked file under `SRC` — this patch is never pushed, and the resume brings them back untracked); `DIFF HEAD -- SRC > <patches>/<story>-<stage>.patch` (it must exit 0; an empty patch is deleted — nothing to hold); `APPLY -R --check` it — if that fails, undo the intent-to-add (`git restore --staged -- SRC`) and leave the work in place (`tree=in_place`); `git restore --staged --worktree -- SRC`; then `git status --porcelain --ignore-submodules=none -- SRC` must print nothing (`tree=clean`) — if it prints anything, put the work back (`APPLY <patch>`: `tree=in_place`; if that fails too, `tree=partial`). Whatever fails, the patch is kept, and never deleted while it holds the only copy of the work. **No WIP commits.**
+3. Log `hold_complete shas=<…>` (write-ahead, so the log never trips the next clean-tree gate), then commit and push bookkeeping under the normal push rules (a copy of `inbox.md` as `<impl>/unattended-inbox-snapshot.md` included — the patches stay outside git); leave in-flight CI running.
+4. Refresh the resume prompt; record which throwaway runtimes are up and which run started them.
+5. Verify every reported sha on origin; list local-only shas as such.
+6. `INBOX add hold …`; push notification; `INBOX run-end <run-id> <token> hold`; end. (Orchestrator mode: after every runner has ended — U14.)
+
+**The resume prompt is kept current.** At every story boundary the lead rewrites `<state>/resume/epic-<N>.md` from the log, so a session that dies without warning (a hard usage limit, a crash) leaves a current one. It contains: the role and invocation (`/epic-cycle <range> --unattended`, the run id, both hashes); the owner-fixed values; the git-verified state (branch, origin and local heads, each unpushed commit and what it holds, spec status, the ledger load, parked and set-aside stories); every runtime target in use (dev and throwaway), what is loaded there, and which run started it; the project's `stage_preamble`; "First, check the CI result for the last pushed `headSha`"; the next steps in order; and how to end. It never depends on chat history. The main session also records the run's heartbeat (see the resume semantics below).
+
+**Unattended resume semantics** (override Resume Semantics under the flag):
+- Re-invoking the same command resumes. On a **relaunch, nothing asks**: re-run the pre-flight and U2's automatic checks; take every owner answer this run already logged from the log (`permission_mode_attested`, `ci_mode_chosen`, a lead-model acceptance); the telemetry gate logs and continues; a check that would need a new answer stops the run with its report. An interactive re-invocation may ask U2's launch questions again.
+- Take the run lock over per U2; log `unattended_resumed run=<id> policy=<hash> doctrine=<hash> lock_token=<t>` — this is how an owner's committed policy change is accepted. **A `<state>/HOLD`:** an interactive re-invocation clears it (`INBOX hold-clear "resumed by the owner"`). A relaunch clears only a usage hold (`INBOX hold-clear "relaunch" --usage-only`, which leaves any other in place); a time hold or the owner's it honours — it runs the hold steps for whatever the dead session left (a dead stage's tree saved as the resume rule below says), logs `hold_complete`, and ends.
+- A hold patch (`<patches>/<story>-<stage>.patch`) belongs to the story that was mid-pipeline: that story is the resume point, and its latest `hold_saved` says where the work is. `tree=clean`: after the clean-tree gate (`git status --porcelain --ignore-submodules=none -- SRC` prints nothing — the story's ignore and attribute changes stay in the tree across a hold), `APPLY <patch>` — no `--index`: the tree returns exactly to its pre-hold state, new files untracked and nothing staged, so nothing a stage left lying around reaches the story's commit. Exit ≠ 0 → nothing was applied (a plain apply is atomic): keep the patch — it is the only copy — and stop that epic with an inbox item naming it. A tree already dirty where `APPLY -R --check <patch>` exits 0 had the patch applied before a crash: treat it as `tree=in_place`. `tree=in_place`: the dirty tree is the held work, not a dead stage's — confirm it with `APPLY -R --check <patch>` (if that fails, stop that epic). Then delete the patch, log `hold_restored story=<key>`, and continue that story at its next stage. `tree=partial` or `tree=submodule`: stop that epic. (Orchestrator mode: each runner applies its own worktree's hold patches — U14.)
+- Answers per U10. With no story mid-pipeline, the resume point is the earliest story whose anchor is not `committed` or `story_dropped`, **skipping parked, stopped and set-aside stories that are still unanswered, and stories waiting on an epic that has not merged.**
+- An open clarification is classified and ruled or parked, not surfaced.
+- **A dead stage's tree** — a dirty source tree that no `hold_saved tree=in_place` accounts for (a fresh lead with no orchestrator above it, or a runner re-spawned after its predecessor died), or a stage a usage limit cut off: save it with step 2's tools as `<evidence>/<story>-dead-<stage>-<UTC>.patch` — evidence only, never applied — and log `stage_dead story=<key> stage=<stage> evidence=<path> rerun_from=<stage>` before the restore. `rerun_from` is the earliest stage whose output the save took out: QA's tests and review patches stay uncommitted until the story's commit, so a code review that died after QA re-runs QA first; a pick-up that died between its apply and its commit re-runs the pick-up. Until a stage completes after it, the latest `stage_dead` decides where the story resumes, whatever open `stage_spawned` follows it. Before re-running `bmad-build-auto`, set the spec `status: in-progress` if nothing since its `baseline_revision` is committed (`git diff --quiet <baseline_revision> HEAD -- SRC` exits 0): `in-review` would send it to review over code the save took out. (A picked-up story's code is in its pick-up commit, so its review re-runs as it was.) If the save fails (step 2's checks), keep the evidence and stop that epic.
+- Divergence, branch drift, a diverged head, ambiguous liveness → stop that epic.
+- Idempotent steps (sprint planning, `spine_resolved`) re-run; the attended setup gates this run already logged are skipped.
+- The main session records its heartbeat (`INBOX run-boundary <run-id> <token> "<where>"`) at every stage boundary — the orchestrator at every notification and every dispatch — so the lock's age says whether the run is alive. A heartbeat refused with exit 4 means another session took the run over: stop at once.
+- **The log beats the resume prompt** wherever they disagree.
+- A resume is always a fresh session or a fresh spawn, above all after an account switch. Never message a runner whose call has returned, except through the parallel kit's sanctioned resume.
+
+## U12. The inbox, notifications, and the run report
+
+- **The inbox** is written only through `INBOX` (an append-only journal plus a rendered `inbox.md`; locked writes). Kinds: `parked`, `stopped`, `veto`, `held-merge`, `hold`, `retro`, `report`. An item's unit names what it blocks (`Story 4.2`, `Epic 4`, `DW-41`); its options and recommendation are what the owner answers. Routine `decide` rulings never go in.
+- **Integrity:** the main session runs `INBOX verify` before every stage spawn and after every return (runners: before each of theirs). A mismatch means a hand edit (or a crash mid-write): `INBOX render` saves the edited file aside (`inbox.md.edited-<UTC>`, listed in the inbox) and rebuilds `inbox.md` from the journal. A hand edit is never applied; tell the owner once (an inbox `report` item and a push: "your edit was saved but not applied — answer with the script or `--review`"). Stages are forbidden to touch `<state>` (U6). `verify` covers `inbox.md` only: a determined agent with a shell could run the script itself — which is why outward actions never execute unattended (U1), and why `--review` shows every answer with who gave it, when, and through what.
+- **Answers** come from the owner (`INBOX answer U-<n> "<answer>" --by owner`, or `--review`), or through a relay: a companion session, or anyone acting for the owner, runs `INBOX answer U-<n> "<answer>" --by <who> --quote "<the owner's words, verbatim>"`. A companion learns of new items by watching `inbox.md`; nothing messages it (Rule 18).
+- **Notifications** are sent only by the main session, with `notify.push: true`: on park, stop, hold and run end — never for routine rulings. Each carries the item's one-line question and recommendation, not just "see inbox". In orchestrator mode, runners report parks and stops as they happen (U14), so the orchestrator can notify at once.
+- **Run report** — `INBOX add report …` and a log entry `unattended_report` at completion, hold or stop: stories merged, with times; rulings, with shas; open veto items; parked, stopped and set-aside stories; held merges; CI health; pace (stories per day, wall time per story); the remaining queue; risk against `milestones`; anything the owner should know before the next release. Log `unattended_report` first, then commit the inbox snapshot (`<impl>/unattended-inbox-snapshot.md`) — in the final merge's record commit when the run ends with a merge (U9), otherwise in the epic branch's last bookkeeping commit — then `INBOX run-end <run-id> <token> <reason>`.
+
+## U13. `/epic-cycle --review` (attended)
+
+The owner runs it when checking in, from any session in the project. **It only records:** it reads, explains and recommends, and writes nothing but inbox answers through the script — no commit, no merge, no checkout, no cycle-log line — so it is safe beside a live run. The run applies every answer (U10).
+
+1. **Find the run state:** `_bmad-output/unattended/` and, when `_bmad/custom/parallel.yaml` exists, `<worktree_base>/.coordination/unattended/` (its `worktree_base`). Review each that has a journal. `INBOX run-status` shows whether a run holds the lock, and its last heartbeat.
+2. Read the inbox and the logs; re-verify the reported branch heads on origin with `git ls-remote` (no fetch: it would contend with a live run's pushes); other shas are verified by the run, which fetches.
+3. Walk through, with a recommendation each, recording each answer with `INBOX answer U-<n> "<answer>" --by owner --via review`:
+   1. **Parked questions.**
+   2. **Stopped units:** what happened; options — re-plan, an override with a finite item list, drop the story (owner-only scope removal).
+   3. **Veto-window rulings:** keep, or reverse.
+   4. **Held merges:** merge now, or keep holding.
+   5. **Headless retrospectives:** the verdict, the findings, the new action items (keep or drop), and the proposed status changes to earlier items (each confirmed or not).
+   6. **Amended ADs:** keep; a reversal is a fix story; `bmad-architecture`'s interactive Update is recommended once no run is live.
+   7. **Dependency-graph changes awaiting re-approval** (orchestrator mode).
+   8. **Relayed answers:** confirm each (re-record it `--by owner`), or replace it.
+   9. **Hand edits saved aside:** what they said, and the answer to record instead.
+4. **A summary,** and how to start or resume the run so the answers are applied. Items that need no pipeline work (a veto kept, a report read) are resolved here: `INBOX resolve <U-id> review <answer_ref|-> "<note>"` — "already resolved" means the run got there first, which is fine. Everything else stays answered for the run.
+
+## U14. Orchestrator mode (parallel kit)
+
+**The orchestrator** is the main session (U2–U13 apply to it). It passes `--unattended`, the run id, both hashes, the absolute `<state>` path and `hold_at=<UTC|none>` in every runner spawn and resume prompt — `hold_at` is the earlier of the policy's `hold.at` (unless that is earlier than the run lock's `started`) and `started` plus `hold.after_hours`.
+
+**A runner** is the lead for its epic (U3–U10 apply), with these exceptions:
+- It skips U2 and U13 entirely and never touches the run lock: never `INBOX init`, `run-*`, `answers`, `resolve` or `answer`. It may `INBOX add` and `INBOX hold` (a time or usage trigger only), and runs `INBOX verify` around its stages.
+- It reads the policy and this doctrine from the main checkout (absolute paths), checks their hashes against the ones in its prompt (a mismatch stops its epic), and logs `runner_unattended_start run=<id> policy=<hash> doctrine=<hash>`.
+- Its epic start is loop work (U8).
+- **It reports each park or stop as it happens:** after `INBOX add`, it ends its turn with `## Clarification Needed` beginning `PARKED U-<n>:` or `STOPPED U-<n>:` and a one-line summary. The orchestrator notifies the owner and resumes it with "continue with independent work".
+- **Cross-epic matters** go to the orchestrator as `## Clarification Needed`: contended paths, other epics' stories, AD amendments. The orchestrator classifies and rules — or parks — and resumes the runner through the sanctioned orchestrator→runner message.
+- **A story that must wait for another epic** (a contended path that epic owns): the runner sets it aside (U4) with reason `waiting_on epic <M>`, logs `story_waiting story=<key> on=<M>`, and continues with independent work. It is skipped until epic M has merged.
+- **Hold:** at every stage boundary it checks `<state>/HOLD`, the clock against the `hold_at` in its prompt, and any usage warning or limit it has seen. A time or usage trigger it writes itself (`INBOX hold "auto: time hold_at"` / `"auto: usage <what it saw>"`), then it holds (U11) — so a time hold never waits for a notification, and the orchestrator stops dispatching into a spent quota.
+- **It runs the headless retrospective** after its burn-down gate and before its integrate-forward (contract item 9), commits its outputs, and reports `retro: verdict=<…> doc=<path>` in the contract.
+- **When nothing independent remains** (gap-fill included), or at a hold, it finishes its bookkeeping (a hold: U11 step 2 in its worktree), refreshes its epic's resume prompt (`<state>/resume/epic-<N>.md`), and ends with `## Epic Runner Ended` followed by `epic: {N}`, `reason: parked|stopped|waiting|hold`, `waiting_on: <M>` (for `waiting`), `head: <sha>`, `unpushed_work: none` (or the list), `inbox: <U-ids>`, `applied: <U-n at=<answer_ref>, …>|none`. An epic that finishes always ends with the Complete contract (carrying `retro:` and `applied:`), never `ready_for_merge: false`: a runner that cannot complete ends with `reason: stopped`.
+- **On re-dispatch** it is given its epic's resume prompt and any answers to apply (`apply U-n at=<answer_ref>: <answer>`); it applies its own worktree's hold patches at its resume point (U11), applies the answers there (U10's steps, U4's pick-up), and reports each as `applied:`. Told "integrate forward, then pick up <story>", it does exactly that.
+
+**The orchestrator:**
+- **Answers:** only the orchestrator reads `INBOX answers` — on every notification, and before it ends. It routes each answer to the epic that owns the unit: if that epic's runner has ended, it re-dispatches the runner with the answer in its prompt (`apply U-n at=<answer_ref>: <answer>`); if the runner is live, it passes the answer in its next resume message. Never two runners on one epic. Answers that belong to no running or ended epic — a held merge, a graph re-approval, a merged epic's retrospective items, a decision-sheet question the orchestrator parked, a veto reversal for a merged epic — the orchestrator applies itself in the main checkout (the merge queue; a ledger trailer; `sprint_status.py`; a routed fix story), following U10's write-ahead. Every `applied: U-n at=<answer_ref>` line a runner returns — in a Complete contract, an Ended contract or a clarification — is resolved at once (`INBOX resolve U-n orchestrator <answer_ref> "<epic N>"`).
+- **Notification handling:** setup stops before dispatch are surfaced to the owner, as today. Every runner-reported item after dispatch is loop work: classified (U3); `decisions_for_user:` items as at the decision sheet (U9); an unmeetable `TOOLING:` need stops that slot's story; ambiguous runner liveness stops that slot. Each notification also refreshes the heartbeat (`INBOX run-boundary`). `## Epic Runner Ended` is recorded in `dispatch.yaml` by its reason and **never re-spawned blindly**: `parked` / `stopped` → `waiting` until an answer for that epic arrives; `waiting` → `waiting` with `waiting_on: <M>`, re-dispatched ("integrate forward, then pick up <story>") once epic M has merged; `hold` → `held`, re-dispatched when the run resumes.
+- **AD amendments:** allowed (U7 step 2) only when no other in-flight epic's specs cite the AD; the runner then writes it in its worktree with `orchestrator` in the marker. If another in-flight epic cites it, the story stops — a re-architecture across epics is the owner's. Two runners therefore never amend one AD.
+- **Contended paths:** a story that must edit a path another in-flight epic owns waits, set aside; the orchestrator records it in `dispatch.yaml` (`waiting_on: epic <M>`) and re-dispatches the waiting epic after epic M merges. Two epics waiting on each other (a cycle in `waiting_on`) can never both proceed: stop both stories, with an inbox item.
+- **Merge queue (SC-4-P):** `when_green` replaces `queue-ask`. A `retro: verdict=rejected` (or any failing U9 condition) holds the merge: the orchestrator owns it — `dispatch.yaml` state `held_merge`, an inbox `held-merge` item — and a "merge now" answer releases it (if the feature branch has moved, one more integrate-forward first: resuming the runner if it is live, otherwise re-dispatching it once with "integrate forward, then complete"). If the feature branch moved after the runner integrated forward, resume the runner for one more integrate-forward rather than resolving anything in the orchestrator. Dispatch continues along the approved graph; a split, gap-fill or fix-forward story inside one epic re-records the graph hash (`reason=split|gap_fill|fix_forward`); any other structural change pauses only the affected epics, with an inbox item, until the owner re-approves the graph. A red feature head → no new dispatch; running runners finish; inbox item. The merge record carries the inbox snapshot (U9).
+- **Time and usage holds:** the orchestrator evaluates the policy's `hold.at` / `hold.after_hours` (against the run lock's `started`) and any usage warning at every notification and dispatch, and writes `INBOX hold "auto: time …"` / `"auto: usage …"` itself; runners check the same triggers at their stage boundaries (above). A runner's `reason: hold` with `<state>/HOLD` present starts the orchestrator's hold.
+- **Idle slots:** dispatch the next eligible epic into a freed slot — never while `<state>/HOLD` exists. When no runner is live and nothing is dispatchable or answered, end the run with its report — never idle.
+- **Hold:** write `<state>/HOLD` (`INBOX hold`); dispatch nothing more. Each runner ends at its next stage boundary with `## Epic Runner Ended reason: hold` (state `held`). Wait for every runner, however long its current stage takes — never stop a live runner, never write in its worktree. Then verify, log `hold_complete`, notify, `INBOX run-end`, and end. **On resume:** clear the hold as U11 says (an interactive re-invocation always; a relaunch only a usage hold — it honours the owner's and a time hold), then re-dispatch from `dispatch.yaml`, within `max_parallel_epics`: every `held` epic first, with its epic's resume prompt; a `waiting` epic only once its answer has arrived or its `waiting_on` epic has merged; a `held_merge` epic never — it is the merge queue's (a released one whose runner is gone is re-dispatched once, as above).
+- **Stale runtime locks after a crash:** a resumed orchestrator in a fresh session sweeps every lock whose `acquired_at` predates its own start (those holders died with the old session) and logs `runtime_lock_swept reason=prior_session`. Within a session, the kit's rule stands: sweep only a lock whose owner is confirmed dead.
+````
+
+### File 8: `_bmad/custom/unattended.yaml` (template — write ONLY if the file is absent)
+
+The project's unattended policy. **Never overwrite an existing file** — it is project-owned; Step 1 reported any keys it lacks. Write this template when absent:
+
+```yaml
+# /epic-cycle --unattended policy. Project-owned: the kit writes this template only when the file is absent and
+# never overwrites it. The categories are data the lead classifies against (doctrine: epic-cycle-unattended.md U3):
+# hard_stops first, then owner_only (park), then veto_window (decide and report); anything else is decided.
+# Changing this file mid-run stops the run at the next story boundary: change it during a hold, commit it, then resume
+# (the resume records the new version). Orchestrator mode reads it from the main checkout.
+version: 2
+product_defaults:      # tie-break principles for calls made alone, most important first (edit for this project)
+  - The architecture spine is the contract; where it is silent, choose the simplest option consistent with it.
+  - When a choice trades safety for convenience, keep the safe behaviour and make it convenient.
+  - Measure, don't guess; anything not yet measured is labelled (inference).
+  - Smaller is better; split rather than stretch a story.
+  - Text claims only what the product does.
+owner_fixed: []        # values the owner chose; quoted verbatim in every stage, runner and resume prompt; never re-derived
+stage_preamble: ""     # a project line that must head every stage prompt (e.g. "one test-runner call per message")
+milestones: []         # [{date: 2026-11-30, scope: [1, 2, 3, 4, 5, 6], name: "release 1"}] - defines "the release";
+                       # the run report measures pace and risk against these. With none, every AC move is owner_only.
+licences_allowed: [MIT, BSD-2-Clause, BSD-3-Clause, Apache-2.0, ISC]
+hard_stops:            # checked FIRST. Stop the affected unit (story, epic, slot or run); record; continue elsewhere
+  - a security incident (a secret in a commit, log, trace or ANY printed output; pushing to any remote other than origin; changing repository or package visibility) - never rewrite history
+  - a red CI head that is not a known flake and cannot be fixed inside its story, nor fixed forward (limits.fix_forward_per_cause)
+  - a conflict that cannot be classified
+  - agent liveness that cannot be established; a live orphan writer that cannot be stopped
+  - a tooling need that cannot be met
+  - a workspace integrity error; a policy or doctrine file whose hash changed without a logged resume
+owner_only:            # park: record in the inbox, continue with independent work. Park ONLY on an explicit match here.
+  - releases, tags, release pull requests, anything landing on the trunk
+  - anything outward-facing (publishing, posting, filing external reports, DNS or hosting, repository or service settings, making anything public)
+  - dropping scope from a release, or deferring it out of the release; moving an AC when no milestone defines the release
+  - changing a number stated as a product target in the PRD or epics (implementation details such as timeouts, batch sizes and retry counts are decide)
+  - changing epic boundaries, story-to-epic assignment, or dependency statements
+  - waiving a HIGH finding
+  - money, accounts, keys, quota; a dependency under a licence not in licences_allowed
+  - destroying or migrating data on a shared (non-throwaway) runtime
+  - agent instruction files (CLAUDE.md, AGENTS.md, anything under .claude/) and anything under _bmad/ (the kit's own run-state writes excepted)
+  - stopping, recreating or tearing down a runtime resource this run did not start (using one is fine)
+  - rewriting pushed history (force-push); deleting branches or tags other than the kit's own merged epic branches
+veto_window:           # decide now and report; the owner may reverse before the next release
+  - security posture; how secrets and credentials are stored or handled
+  - privileges, roles and access grants
+  - a change to how stored data is kept (schema, format, retention)
+  - weakening a guarantee stated in the PRD, the spine or a spec's intent
+  - public-facing text NOT already specified in the UX or PRD; claims about what the product does; licence and attribution notices; project or owner identity
+  - a new third-party dependency under a licence in licences_allowed, pinned to an exact version
+  - moving an AC to a not-yet-planned story in the same release (never one a release gate, milestone or end-to-end acceptance test depends on)
+  - adding an AC to another epic's not-yet-planned story (sequential; parallel runs route this to the orchestrator)
+  - amending an architecture decision (AD), within the bounds of the doctrine's U7
+gates:
+  retrospective: headless      # headless | skip (skip for quota-tight runs)
+  model_tier: record_only      # offers are recorded, never applied (tier changes are spend); the mandatory rollback still applies
+  merge_to_feature: when_green # when_green | hold
+  merge_conflicts: resolve     # resolve | ask. Overrides parallel.yaml integrate_conflicts for the run
+  gap_fill: burndown           # burndown | none
+  gap_fill_stories: []         # standing cleanup stories, per epic, that plan the gap-fill supply (e.g. ["4-9-epic-4-cleanup"])
+limits:
+  clarification_rounds: 3      # per stage per story; then the story stops
+  split_children: 6            # stories one original story may become; past that the story stops
+  fix_forward_per_cause: 1     # per first-red sha; then the epic stops
+  gap_fill_per_epic: 2         # gap-fill stories one epic may charter while its other stories are blocked
+  veto_open_max: 20            # open veto items; at the limit, merges to the feature branch are held until --review
+  unverified_stories: 1        # stories that may be committed past an unresolved CI result during a CI outage
+ci: {queue_minutes: 60, blocked_hours: 6, without_ci: ""}   # without_ci: local_green | hold - asked at launch when empty and CI is none/unavailable
+hold: {at: "", after_hours: 0} # your time hold: a clock time (ISO 8601, UTC) or hours since the run started or you last resumed it; a relaunch honours it
+notify: {push: true}
+```
+
+### File 9: `_bmad/scripts/unattended-inbox.sh` (verbatim)
+
+Cross-platform bash, like `ledger.sh` (invoked as `bash _bmad/scripts/unattended-inbox.sh <state> …`; no executable bit needed). The inbox is the owner's channel in an unattended run: items are added by the lead, answered by the owner (or a relay quoting the owner) or through `--review`, and resolved exactly once — against the latest answer's timestamp, so an answer that arrives meanwhile is never dropped. Only this script writes the journal and the rendered `inbox.md`; a hand edit of `inbox.md` is saved aside and never applied. It also keeps the run lock (holder, host, heartbeat) and hold requests.
+
+```bash
+#!/usr/bin/env bash
+# The owner's inbox for an unattended /epic-cycle run (doctrine: _bmad/custom/epic-cycle-unattended.md, U12-U13).
+#
+# Cross-platform: Git Bash on Windows, bash 3.2+ on macOS/Linux; needs awk, sed, date, find, cmp, uname.
+# Everything lives in the run state directory <state>, outside git's view (sequential: _bmad-output/unattended/,
+# gitignored; orchestrator mode: <worktree_base>/.coordination/unattended/):
+#   inbox.journal  append-only event log, one TAB-separated line per event -- the source of truth
+#   inbox.md       rendered from the journal on every write -- the file people read; never edited by hand
+#   run.lock       present while a run is live: run id, holder, host, heartbeat
+#   HOLD           present while a hold is requested
+# Only this script writes the journal and inbox.md. A hand edit of inbox.md is never applied: the next write saves
+# it as inbox.md.edited-<UTC> (listed in the inbox) and re-renders. `verify` covers inbox.md only -- a determined
+# agent with a shell can still run this script, which is why the doctrine never executes outward actions unattended.
+set -euo pipefail
+
+usage() {
+  cat >&2 <<'EOF'
+usage: bash unattended-inbox.sh <state-dir> <command> [args]
+  init <run-id>                  create the state directory, journal and inbox (idempotent; a new run id is recorded)
+  add <kind> "<unit>" "<question>" "<options>" "<recommendation>" "<blocks>"
+                                 add an item; prints U-<n>. kind: parked|stopped|veto|held-merge|hold|retro|report.
+                                 A parked, stopped, held-merge or retro item is one per unit: an open one is reused
+                                 ("U-<n> EXISTS"). veto, hold and report items are always added.
+  answer U-<n> "<answer>" --by <who> [--quote "<the owner's words>"] [--via <channel>]
+                                 record an answer; anyone but `owner` must pass --quote (a relay quotes the owner verbatim)
+  answers                        answered, unresolved items: U-n TAB answer_ref TAB by TAB via TAB answer TAB quote
+                                 (answer_ref = <UTC>#<journal line>: it names one answer exactly)
+  resolve U-<n> <applied_by> <answer_ref|-> ["<note>"]
+                                 mark an item resolved -- once. <answer_ref> must be the latest answer's (from `answers`),
+                                 so an answer that arrived meanwhile is never silently dropped; `-` resolves an item nobody
+                                 answered (a report, a hold)
+  list [open|all]                U-n TAB kind TAB unit TAB state TAB question (default: open = not resolved)
+  hold "<reason>"                request a hold (writes HOLD). Holds rank: the owner's (any reason not starting
+                                 "auto:"), then "auto: time ...", then "auto: usage ..."; a weaker one never replaces a
+                                 stronger one ("HOLD KEPT: <reason>")
+  hold-clear "<reason>" [--usage-only]
+                                 clear it (a resume does this after a hold); --usage-only (a relaunch) clears only an
+                                 "auto: usage" hold and otherwise exits 5 with "HOLD KEPT: <reason>"
+  run-status                     print the run lock with its heartbeat age; exit 3 if one exists, 0 ("none") if not
+  run-start <run-id> <holder>    take the run lock and print `token=<t>`; exit 3 (printing it) if one exists
+  run-takeover <run-id> <holder> "<reason>"
+                                 replace a lock that names <run-id> (a resume) -- or, with reason "owner-confirmed ...",
+                                 any lock; prints a new `token=<t>`, so the replaced session's next heartbeat fails.
+                                 A takeover of the same run keeps its `started` (hold times count from it); an
+                                 owner-confirmed one starts the clock again
+  run-boundary <run-id> <token> "<where>"   heartbeat; refused (exit 4) unless the lock holds this run id AND token
+  run-end <run-id> <token> "<reason>"       release the run lock; refused (exit 4) on any other run id or token
+  verify                         exit 0 if inbox.md is exactly the journal's rendering, else 1
+  render                         save any hand edit, then rebuild inbox.md from the journal
+Values are single-line, contain no TAB, and the unit and question are non-empty; run ids and holders have no spaces.
+EOF
+  exit 1
+}
+
+STATE="${1:-}"; CMD="${2:-}"
+[ -n "$STATE" ] && [ -n "$CMD" ] || usage
+J="$STATE/inbox.journal"; MD="$STATE/inbox.md"; LOCK="$STATE/inbox.lock"; RL="$STATE/run.lock"
+now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+single() { case "$1" in *$'\n'*|*$'\t'*|*$'\r'*) echo "ERROR: values must be single-line with no TAB" >&2; exit 1 ;; esac; }
+need() { [ -n "$2" ] || { echo "ERROR: $1 is required" >&2; exit 1; }; }
+rank() { case "$1" in "auto: usage"*) echo 0 ;; "auto:"*) echo 1 ;; *) echo 2 ;; esac; }   # hold strength
+need_journal() { [ -f "$J" ] || { echo "ERROR: $J not found; run init first" >&2; exit 1; }; }
+
+# Writers take an exclusive lock (writes take milliseconds). A lock is stale when its content has not changed for a
+# whole retry interval AND its writer is gone (same host, dead pid) -- or when it is older than 10 minutes. The content
+# is re-read just before removal, so a waiter never removes a lock another waiter has just taken.
+lock() {
+  tries=0; prev=""
+  until ( set -o noclobber; printf 'pid=%s host=%s at=%s\n' "$$" "$(uname -n)" "$(now)" > "$LOCK" ) 2>/dev/null; do
+    held="$(cat "$LOCK" 2>/dev/null || true)"
+    if [ "$tries" -gt 0 ] && [ "$held" = "$prev" ]; then
+      hpid="$(printf '%s' "$held" | sed -n 's/.*pid=\([0-9]*\).*/\1/p')"; hhost="$(printf '%s' "$held" | sed -n 's/.*host=\([^ ]*\).*/\1/p')"
+      if [ -n "$(find "$LOCK" -mmin +10 2>/dev/null)" ] || { [ -n "$hpid" ] && [ "$hhost" = "$(uname -n)" ] && pid_gone "$hpid"; }; then
+        if [ "$(cat "$LOCK" 2>/dev/null || true)" = "$held" ]; then echo "WARNING: breaking stale $LOCK ($held)" >&2; rm -f "$LOCK"; prev=""; continue; fi
+      fi
+    fi
+    prev="$held"
+    tries=$((tries + 1)); [ "$tries" -lt 120 ] || { echo "ERROR: $LOCK held for 120 s by a live writer ($held)" >&2; exit 1; }
+    sleep 1
+  done
+  trap 'rm -f "$LOCK"' EXIT
+}
+
+# A pid is gone only if `kill -0` says "No such process" (another user's live process answers "not permitted").
+pid_gone() { err="$(LC_ALL=C kill -0 "$1" 2>&1)" && return 1; case "$err" in *"o such process"*) return 0 ;; esac; return 1; }
+
+# The rendering: deterministic, from the journal alone (optionally its first N lines). The footer records how many
+# journal lines it reflects, so a render that a crash left behind is never mistaken for a hand edit.
+render_to() {
+  awk -F'\t' -v lim="${2:-0}" '
+    lim > 0 && NR > lim { exit }
+    { cnt = NR }
+    function sec(k) { return k == "parked" ? 1 : k == "stopped" ? 2 : k == "veto" ? 3 : k == "held-merge" ? 4 : k == "hold" ? 5 : k == "retro" ? 6 : 7 }
+    $2 == "init"    { run = $4; next }
+    $2 == "add"     { n++; id[n] = $3; at[$3] = $1; kind[$3] = $4; unit[$3] = $5; q[$3] = $6; opt[$3] = $7; rec[$3] = $8; blk[$3] = $9; next }
+    $2 == "answer"  { ans[$3] = $5 " (by " $4 (($7 != "") ? " via " $7 : "") ", " $1 "#" NR (($6 != "") ? "; quoting the owner: \"" $6 "\"" : "") ")"; next }
+    $2 == "resolve" { res[$3] = "resolved by " $4 ", " $1 (($6 != "") ? " -- " $6 : ""); next }
+    $2 == "edit"    { ne++; ed[ne] = $4 " (" $1 ")"; next }
+    $2 == "hold"    { hold = "requested " $1 ": " $4; next }
+    $2 == "hold-clear" { hold = ""; next }
+    END {
+      print "# Unattended inbox" (run != "" ? " -- run " run : "")
+      print ""
+      print "Answer an item with `bash _bmad/scripts/unattended-inbox.sh <this directory> answer U-<n> \"<answer>\" --by owner`, or run `/epic-cycle --review`. This file is generated: a hand edit is saved aside and never applied."
+      if (hold != "") { print ""; print "**Hold " hold "**" }
+      split("Parked|Stopped|Veto window|Held merges|Holds|Retrospectives to review|Run reports", title, "|")
+      for (s = 1; s <= 7; s++) {
+        hdr = 0
+        for (i = 1; i <= n; i++) {
+          u = id[i]; if (sec(kind[u]) != s || (u in res)) continue
+          if (!hdr) { print ""; print "## " title[s]; hdr = 1 }
+          print ""; print "### " u " | " kind[u] " | " unit[u] " | " at[u]
+          print "question: " q[u]; print "options: " opt[u]; print "recommendation: " rec[u]; print "blocks: " blk[u]
+          print "answer: " ((u in ans) ? ans[u] : "(none yet -- answer with the script or --review)")
+        }
+      }
+      if (ne) { print ""; print "## Hand edits (saved, not applied)"; for (i = 1; i <= ne; i++) print "- " ed[i] }
+      hdr = 0
+      for (i = 1; i <= n; i++) {
+        u = id[i]; if (!(u in res)) continue
+        if (!hdr) { print ""; print "## Resolved"; hdr = 1 }
+        print "- " u " | " kind[u] " | " unit[u] ": " q[u] " -> " ((u in ans) ? ans[u] : "(no answer)") "; " res[u]
+      }
+      print ""; print "<!-- journal: " cnt " lines -->"
+    }' "$J" > "$1.tmp.$$" && mv "$1.tmp.$$" "$1"
+}
+
+# Called under the lock before every write: a hand edit of inbox.md is saved and recorded, never applied.
+save_edit() {
+  [ -f "$MD" ] || return 0
+  render_to "$STATE/.expected"
+  if ! cmp -s "$STATE/.expected" "$MD"; then
+    seen="$(sed -n 's/^<!-- journal: \([0-9]*\) lines -->$/\1/p' "$MD" | tail -1)"
+    if [ -n "$seen" ]; then render_to "$STATE/.earlier" "$seen"; fi
+    if [ -n "$seen" ] && cmp -s "$STATE/.earlier" "$MD"; then
+      :   # an earlier rendering left by a crash between a journal write and its render -- not a hand edit
+    else
+      f="inbox.md.edited-$(date -u +%Y%m%dT%H%M%SZ)-$$"; cp "$MD" "$STATE/$f"
+      printf '%s\tedit\t-\t%s\n' "$(now)" "$f" >> "$J"
+      echo "NOTE: inbox.md had a hand edit; saved as $f (not applied)" >&2
+    fi
+  fi
+  rm -f "$STATE/.expected" "$STATE/.earlier"
+}
+
+item_exists()   { awk -F'\t' -v id="$1" '$2 == "add" && $3 == id { f = 1 } END { exit f ? 0 : 1 }' "$J"; }
+item_resolved() { awk -F'\t' -v id="$1" '$2 == "resolve" && $3 == id { f = 1 } END { exit f ? 0 : 1 }' "$J"; }
+lock_field()    { [ -f "$RL" ] && awk -v k="$1" '{ for (i = 1; i <= NF; i++) if (index($i, k "=") == 1) { print substr($i, length(k) + 2); exit } }' "$RL"; }
+write_lock() {  # run-id holder started token where
+  printf 'run=%s holder=%s host=%s started=%s token=%s heartbeat=%s heartbeat_epoch=%s last_boundary=%s\n' \
+    "$1" "$2" "$(uname -n)" "$3" "$4" "$(now)" "$(date -u +%s)" "$5" > "$RL.tmp.$$" && mv "$RL.tmp.$$" "$RL"
+}
+nospace() { case "$2" in *" "*) echo "ERROR: $1 must not contain spaces" >&2; exit 1 ;; esac; }
+new_token() { printf '%s-%s' "$(date -u +%s)" "$$"; }
+own_lock() {    # run-id token -- exit 4 unless this session holds the lock
+  [ -f "$RL" ] || { echo "ERROR: no run.lock -- this session no longer holds the run" >&2; exit 4; }
+  [ "$(lock_field run)" = "$1" ] && [ "$(lock_field token)" = "$2" ] || { echo "ERROR: run.lock is held by run $(lock_field run) (holder $(lock_field holder)), not this session -- stop" >&2; exit 4; }
+}
+
+case "$CMD" in
+  init)
+    need "run-id" "${3:-}"; single "$3"; mkdir -p "$STATE"; lock
+    [ ! -f "$J" ] || save_edit
+    if [ ! -f "$J" ] || [ "$(awk -F'\t' '$2 == "init" { r = $4 } END { print r }' "$J")" != "$3" ]; then
+      printf '%s\tinit\t-\t%s\n' "$(now)" "$3" >> "$J"
+    fi
+    render_to "$MD"; echo "inbox=$MD" ;;
+  add)
+    [ $# -eq 8 ] || { echo "ERROR: add needs exactly 6 arguments (see usage)" >&2; usage; }
+    case "$3" in parked|stopped|veto|held-merge|hold|retro|report) ;; *) echo "ERROR: kind=$3 is not one of parked|stopped|veto|held-merge|hold|retro|report" >&2; exit 1 ;; esac
+    need "unit" "$4"; need "question" "$5"
+    for v in "$4" "$5" "$6" "$7" "$8"; do single "$v"; done
+    need_journal; lock; save_edit
+    case "$3" in veto|hold|report) existing="" ;;
+      *) existing="$(K="$3" U="$4" awk -F'\t' '$2 == "add" && $4 == ENVIRON["K"] && $5 == ENVIRON["U"] { last = $3 } $2 == "resolve" { r[$3] = 1 } END { if (last != "" && !(last in r)) print last }' "$J")" ;;
+    esac
+    if [ -n "$existing" ]; then render_to "$MD"; echo "$existing EXISTS"; exit 0; fi
+    n="$(awk -F'\t' '$2 == "add" { c++ } END { print c + 1 }' "$J")"
+    printf '%s\tadd\tU-%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(now)" "$n" "$3" "$4" "$5" "$6" "$7" "$8" >> "$J"
+    render_to "$MD"; echo "U-$n" ;;
+  answer)
+    ID="${3:-}"; ANS="${4:-}"; need "U-<n>" "$ID"; need "answer" "$ANS"
+    BY=""; QUOTE=""; VIA=""; shift 4
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --by|--quote|--via) [ $# -ge 2 ] || { echo "ERROR: $1 needs a value" >&2; exit 1; }
+          case "$1" in --by) BY="$2" ;; --quote) QUOTE="$2" ;; --via) VIA="$2" ;; esac; shift 2 ;;
+        *) usage ;;
+      esac
+    done
+    need "--by" "$BY"
+    [ "$BY" = "owner" ] || [ -n "$QUOTE" ] || { echo "ERROR: an answer relayed by '$BY' must quote the owner verbatim (--quote)" >&2; exit 1; }
+    for v in "$ID" "$ANS" "$BY" "$QUOTE" "$VIA"; do single "$v"; done
+    need_journal; lock; save_edit
+    item_exists "$ID" || { echo "ERROR: $ID not found" >&2; exit 1; }
+    ! item_resolved "$ID" || { echo "ERROR: $ID is already resolved" >&2; exit 1; }
+    printf '%s\tanswer\t%s\t%s\t%s\t%s\t%s\n' "$(now)" "$ID" "$BY" "$ANS" "$QUOTE" "$VIA" >> "$J"
+    render_to "$MD"; echo "$ID answered" ;;
+  answers)
+    need_journal
+    awk -F'\t' '$2 == "answer" { a[$3] = $1 "#" NR "\t" $4 "\t" $7 "\t" $5 "\t" $6; if (!($3 in seen)) { seen[$3] = 1; ord[++n] = $3 } } $2 == "resolve" { r[$3] = 1 }
+      END { for (i = 1; i <= n; i++) if (!(ord[i] in r)) print ord[i] "\t" a[ord[i]] }' "$J" ;;
+  resolve)
+    ID="${3:-}"; BY="${4:-}"; AT="${5:-}"; NOTE="${6:-}"
+    need "U-<n>" "$ID"; need "applied_by" "$BY"; need "answer_ref (or -)" "$AT"
+    for v in "$ID" "$BY" "$AT" "$NOTE"; do single "$v"; done
+    need_journal; lock; save_edit
+    item_exists "$ID" || { echo "ERROR: $ID not found" >&2; exit 1; }
+    ! item_resolved "$ID" || { echo "ERROR: $ID is already resolved -- an item is resolved exactly once" >&2; exit 1; }
+    latest="$(awk -F'\t' -v id="$ID" '$2 == "answer" && $3 == id { t = $1 "#" NR } END { print t }' "$J")"
+    if [ "$AT" = "-" ]; then
+      [ -z "$latest" ] || { echo "ERROR: $ID has an answer ($latest); resolve with that answer_ref after applying it" >&2; exit 1; }
+    else
+      [ "$AT" = "$latest" ] || { echo "ERROR: $ID: the latest answer is from ${latest:-nobody}, not $AT -- read \`answers\` again and apply that one" >&2; exit 1; }
+    fi
+    printf '%s\tresolve\t%s\t%s\t%s\t%s\n' "$(now)" "$ID" "$BY" "$AT" "$NOTE" >> "$J"
+    render_to "$MD"; echo "$ID resolved" ;;
+  list)
+    need_journal
+    awk -F'\t' -v which="${3:-open}" '$2 == "add" { n++; id[n] = $3; k[$3] = $4; u[$3] = $5; q[$3] = $6 } $2 == "answer" { a[$3] = 1 } $2 == "resolve" { r[$3] = 1 }
+      END { for (i = 1; i <= n; i++) { x = id[i]; s = (x in r) ? "resolved" : (x in a) ? "answered" : "open"
+            if (which == "all" || s != "resolved") print x "\t" k[x] "\t" u[x] "\t" s "\t" q[x] } }' "$J" ;;
+  hold|hold-clear)
+    need "reason" "${3:-}"; single "$3"
+    case "${4:-}" in "") ;; --usage-only) [ "$CMD" = hold-clear ] || usage ;; *) usage ;; esac
+    need_journal; lock; save_edit
+    cur=""; [ ! -f "$STATE/HOLD" ] || cur="$(sed -n 's/^requested_at=[^ ]* reason=//p' "$STATE/HOLD")"
+    if [ -f "$STATE/HOLD" ]; then
+      if [ "$CMD" = hold ] && [ "$(rank "$3")" -lt "$(rank "$cur")" ]; then render_to "$MD"; echo "HOLD KEPT: $cur"; exit 0; fi
+      if [ "${4:-}" = --usage-only ] && [ "$(rank "$cur")" -ne 0 ]; then render_to "$MD"; echo "HOLD KEPT: $cur"; exit 5; fi
+    fi
+    printf '%s\t%s\t-\t%s\n' "$(now)" "$CMD" "$3" >> "$J"
+    if [ "$CMD" = hold ]; then printf 'requested_at=%s reason=%s\n' "$(now)" "$3" > "$STATE/HOLD"; else rm -f "$STATE/HOLD"; fi
+    render_to "$MD"; echo "$CMD recorded" ;;
+  run-status)
+    if [ -f "$RL" ]; then
+      e="$(lock_field heartbeat_epoch)"; age=$(( ( $(date -u +%s) - ${e:-0} ) / 60 ))
+      echo "LIVE? $(cat "$RL") heartbeat_age_min=$age"; exit 3
+    fi
+    echo "none" ;;
+  run-start)
+    need "run-id" "${3:-}"; need "holder" "${4:-}"; single "$3"; single "$4"; nospace "run-id" "$3"; nospace "holder" "$4"; mkdir -p "$STATE"; lock
+    if ! ( set -o noclobber; : > "$RL" ) 2>/dev/null; then
+      e="$(lock_field heartbeat_epoch)"; echo "LIVE? $(cat "$RL") heartbeat_age_min=$(( ( $(date -u +%s) - ${e:-0} ) / 60 ))"; exit 3
+    fi
+    t="$(new_token)"; write_lock "$3" "$4" "$(now)" "$t" "start"
+    [ ! -f "$J" ] || { save_edit; printf '%s\trun-start\t-\t%s %s\n' "$(now)" "$3" "$4" >> "$J"; render_to "$MD"; }
+    echo "run.lock taken: run=$3 holder=$4 token=$t" ;;
+  run-takeover)
+    need "run-id" "${3:-}"; need "holder" "${4:-}"; need "reason" "${5:-}"; single "$3"; single "$4"; single "$5"; nospace "run-id" "$3"; nospace "holder" "$4"
+    [ -f "$RL" ] || { echo "ERROR: no run.lock to take over; use run-start" >&2; exit 1; }
+    lock; [ -f "$RL" ] || { echo "ERROR: no run.lock to take over; use run-start" >&2; exit 1; }
+    held="$(lock_field run)"
+    case "$5" in owner-confirmed*) ;; *) [ "$held" = "$3" ] || { echo "ERROR: run.lock names run $held, not $3; only the owner can release another run's lock (reason \"owner-confirmed ...\")" >&2; exit 1; } ;; esac
+    st="$(now)"; case "$5" in owner-confirmed*) ;; *) st="$(lock_field started)"; [ -n "$st" ] || st="$(now)" ;; esac
+    t="$(new_token)"; write_lock "$3" "$4" "$st" "$t" "takeover"
+    [ ! -f "$J" ] || { save_edit; printf '%s\trun-takeover\t-\t%s %s from %s: %s\n' "$(now)" "$3" "$4" "$held" "$5" >> "$J"; render_to "$MD"; }
+    echo "run.lock taken over: run=$3 holder=$4 (was $held) token=$t" ;;
+  run-boundary)
+    need "run-id" "${3:-}"; need "token" "${4:-}"; single "$3"; single "$4"; single "${5:-}"
+    own_lock "$3" "$4"; lock; own_lock "$3" "$4"   # checked again under the writer lock: a takeover may have just landed
+    write_lock "$3" "$(lock_field holder)" "$(lock_field started)" "$4" "${5:-}" ;;
+  run-end)
+    need "run-id" "${3:-}"; need "token" "${4:-}"; need "reason" "${5:-}"; single "$3"; single "$4"; single "$5"
+    own_lock "$3" "$4"; lock; own_lock "$3" "$4"
+    rm -f "$RL"
+    [ ! -f "$J" ] || { save_edit; printf '%s\trun-end\t-\t%s: %s\n' "$(now)" "$3" "$5" >> "$J"; render_to "$MD"; }
+    echo "run.lock released ($5)" ;;
+  verify)
+    need_journal; lock; T="$STATE/.verify"; render_to "$T"
+    if cmp -s "$T" "$MD"; then rm -f "$T"; echo "ok"; else rm -f "$T"; echo "MISMATCH: inbox.md is not the journal's rendering (a hand edit, or a crash mid-write)"; exit 1; fi ;;
+  render)
+    need_journal; lock; save_edit; render_to "$MD"; echo "rendered" ;;
+  *) usage ;;
+esac
+```
+
+**`.gitignore`:** append `_bmad-output/unattended/` (create the file if absent; skip if the line is already there). The run state directory must stay out of git: an owner's answer written while a stage runs must not dirty the tree that `bmad-build-auto`'s finalize checks.
+
+**`.gitattributes`:** append `_bmad/scripts/*.sh text eol=lf` (create the file if absent; skip if the line is already there). A CRLF checkout — Git for Windows' default — breaks `ledger.sh` and `unattended-inbox.sh` (`set: pipefail: invalid option name`), and every worktree is a fresh checkout.
+
 ---
 
 ## Step 3: Write `.claude/commands/epic-cycle.md`
@@ -794,7 +1428,9 @@ You are executing the BMAD Method development implementation cycle for one or mo
 
 **After any context compaction, re-read this file (`.claude/commands/epic-cycle.md`) before your next action** — at least "Task Sequence", the section for the stage or gate you are in, and "Lead Context Management". Compaction keeps only about the first 5,000 tokens of this command, which end before the stage instructions; a lead working from the summary alone drops the stage blocks, the pre-answers and the containment rules from every later spawn prompt.
 
-**Epic range:** $ARGUMENTS (e.g., `1-3` for Epics 1 through 3, `2` for a single epic). If empty, prompt the user for the range.
+**Arguments:** $ARGUMENTS — an epic range (e.g., `1-3` for Epics 1 through 3, `2` for a single epic), optionally followed by `--unattended`; or `--review` alone. If there is no range and no `--review`, prompt the user for the range; a range with `--review` is an argument error.
+
+**`--unattended` or `--review`: read `_bmad/custom/epic-cycle-unattended.md` (the doctrine) in full before anything else, and again after every compaction.** Under those flags it overrides every passage it names — the passages below carry an *Unattended:* pointer to its section (U1–U14) — and after the attended setup the development loop never waits for input: every stop point is decided, vetoed, parked, stopped or held. Without those flags, read it only for the case in its U10 (an attended run after an unattended one). **`--review` alone runs only the doctrine's U13** — the attended review of an unattended run's inbox — and none of the pre-flight gates, setup or Task Sequence below.
 
 ## Pre-flight Runtime Check
 
@@ -806,6 +1442,8 @@ If `Agent` is a deferred tool, load its schema via `ToolSearch` with `"select:Ag
 
 **BMAD + runtime gate (second action):** read `installation.version` from `_bmad/_config/manifest.yaml` and require ≥ 6.11.0 — this command drives `bmad-build-auto`, which does not exist earlier (6.10 projects: use the pre-6.11 kit). **BMAD v7 gate**, checked before the version comparison (a v7 project may have no manifest, or a stale 6.12 one under v7 skills): `.claude/skills/bmad-build-auto/customize.toml` (or its plugin-namespaced equivalent) must declare `[[workflow.review_layers]]`, and no `bmod-method/bmod.toml` may exist under the project's `.claude/skills/`. (One only under `~/.claude/skills/` is a user-level v7 preview: if `_bmad/custom/kit-versions.yaml` records `v7_global_accepted:`, log `v7_global accepted=<date>` and continue; otherwise HALT and tell the user to remove the preview or re-run the kit's install Step 1, which records the acceptance.) Otherwise HALT with: "This kit supports BMAD Method 6.11–6.12.x. This project runs BMAD v7 (<the marker found>), which replaces the review layers, sprint planning and story files the kit drives — its overrides would stop v7's renderer. To keep using these kits, keep the project on 6.12.x (`npx bmad-method@6.12 install --action update --modules bmm --tools claude-code --yes` in the project directory); try the v7 preview in a separate clone." Run `uv --version`; HALT with the install pointer (https://docs.astral.sh/uv/) if it fails — `bmad-build-auto` renders itself through `uv run _bmad/scripts/render_skill.py` and halts on activation without it. Then run `uv run --no-cache _bmad/scripts/resolve_config.py --project-root <abs-root> --key core.project_name`: exit 0 proves uv can run BMAD's scripts (Python ≥ 3.11 available or provisioned); exit 3 means no Python 3.11+ — HALT. Verify these exist: `.claude/skills/bmad-build-auto/SKILL.md`, `.claude/skills/bmad-code-review/SKILL.md`, `.claude/skills/bmad-qa-generate-e2e-tests/SKILL.md`, `.claude/skills/bmad-sprint-planning/scripts/sprint_plan.py` (on a plugin-namespaced install, the equivalent paths). Verify the durable state is tracked: `git check-ignore -q _bmad-output/implementation-artifacts` must FAIL (exit 1) — if the directory is gitignored, HALT: cycle logs, `sprint-status.yaml`, specs and the ledger must live on the epic branch (resume, bookkeeping commits, and the parallel merge queue depend on it); the user removes `_bmad-output/` from `.gitignore` (keeping `_bmad/render/`, `*.user.toml`, `.worktrees/` ignored). Then determine how CI can be read (see "CI Is a Gate"): `ci=gh` when `.github/workflows/` holds a `*.yml` or `*.yaml` workflow, `gh auth status` succeeds, and `git remote get-url origin` is a GitHub URL; `ci=none` only when the repo has no CI configuration at all — no GitHub workflow and none of `.gitlab-ci.yml`, `azure-pipelines.yml`, `.circleci/config.yml`, `Jenkinsfile`, `bitbucket-pipelines.yml`, `.buildkite/`, `.travis.yml`, `.drone.yml`; `ci=unavailable` otherwise (CI exists, but this session cannot read its results) — surface `unavailable` once ("CI results cannot be read from this session; the merge gate will ask you to confirm CI by hand") rather than proceeding as if the suite's local result were the shipped one. Log `runtime_gate bmad=<version> uv=<version> ci=<gh|none|unavailable>`. Resolve `<project_name>`, `<impl>` and `<planning>` with BMAD's config resolver (the shorthand paragraph below). Read the launch environment ("Permission Mode": `printenv CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH CLAUDE_CODE_RETRY_WATCHDOG BASH_MAX_TIMEOUT_MS`) and log `launch_env`; an explicit depth below what the run needs (2 sequential, 3 parallel) → HALT and say which setting to raise.
 
+**Unattended run lock (attended runs — under `--unattended` the doctrine's U2 decides instead, and a runner skips this):** if `_bmad-output/unattended/run.lock` or `<worktree_base>/.coordination/unattended/run.lock` exists, an unattended run may hold this checkout — show `bash _bmad/scripts/unattended-inbox.sh <its directory> run-status` and stop; only the owner can confirm that run is dead and release its lock (doctrine U10, last bullet). Two sessions never work one checkout.
+
 **Telemetry gate (third action):** scan every existing `cycle-log-epic-*.md` for `model_tier_checkpoint` entries whose `result` is `recommend_escalate` or `offer_mixed` with `applied=false`. If any exist, surface them once before starting ("Epic N's checkpoint recommended escalating `implement` to Opus (evidence …); no policy file exists / the user declined — apply now, or continue as is?") and log `telemetry_gate pending=<N>`. Accumulated telemetry that nobody acts on is the failure mode this gate exists for.
 
 **`SPRINT_PLAN` shorthand.** Throughout this command, `SPRINT_PLAN` means `uv run --no-cache <path-to>/bmad-sprint-planning/scripts/sprint_plan.py`, where `<path-to>` is `.claude/skills` (or the plugin-namespaced skills directory). Three more placeholders recur below: `<impl>` and `<planning>` (also written `<implementation_artifacts>` / `<planning_artifacts>`) and `<project_name>`. Resolve all three once, at pre-flight, through BMAD's own resolver — `uv run --no-cache _bmad/scripts/resolve_config.py --project-root <abs-root> --key core.project_name --key modules.bmm.implementation_artifacts --key modules.bmm.planning_artifacts` (JSON out) — and substitute `{project-root}`; by default they are `_bmad-output/implementation-artifacts` and `_bmad-output/planning-artifacts`. Never read them from `_bmad/config.toml` alone: the resolver merges the project's config layers (`_bmad/config.toml`, `_bmad/custom/config.toml`, and the user files), as the rendered skills (`bmad-build-auto`) do. Four pipeline skills do not: `bmad-code-review`, `bmad-qa-generate-e2e-tests`, `bmad-sprint-planning` and `bmad-retrospective` read `_bmad/bmm/config.yaml`. So compare: the resolver's `implementation_artifacts` and `planning_artifacts` must equal those keys in `_bmad/bmm/config.yaml` (after substituting `{project-root}`); a mismatch → HALT — those four skills would write somewhere other than the lead and build-auto. Align the two (re-run the BMAD installer, or set the path in both files) and re-invoke. It is BMAD's deterministic tracker script (JSON in, JSON out; `uv run` may print an `Installed N package(s)` line to stderr — ignore it). Its three subcommands replace the retired `/bmad-sprint-status mode=data|validate`:
@@ -815,7 +1453,7 @@ If `Agent` is a deferred tool, load its schema via `ToolSearch` with `"select:Ag
 - `status` has no per-story list. **`TRACKER_READ`** — `awk '/^development_status:/ { f = 1; next } f && /^[^ #]/ { f = 0 } f && /^  [^ #]/ { print $1, $2 }' <impl>/sprint-status.yaml` — prints `key: status` per line; it is the one sanctioned per-story read (a read, never an edit).
 
 **`LEDGER` shorthand.** `LEDGER` means `bash _bmad/scripts/ledger.sh <impl>/deferred-work.md` (installed by this kit). `LEDGER load` → counts + `owner:<key>=<n>` lines; `LEDGER slice <owner>|all` → `DW-n TAB status TAB owner TAB summary` for non-terminal entries; `LEDGER show DW-n` → one entry; `LEDGER new "<summary>" "<source>" <severity> <fix-risk> <footprint> "<evidence>" <status> <owner> <by> "<note>"` → creates an entry, prints its id; `LEDGER append DW-n "status=… owner=… by=… note=…"` → one trailer line. Nobody in the pipeline reads or edits `deferred-work.md` any other way.
-- `SPRINT_PLAN generate --epic-file <planning>/epics.md --status-file <impl>/sprint-status.yaml --stories-dir <impl> --project <project_name> --date "<MM-DD-YYYY HH:MM>" --set <key>=<status> [--set …]` → the lead's ONLY sanctioned status writer. The merge itself never downgrades, but **`--set` is the script's repair path and is applied unconditionally — it WILL downgrade.** Before every `--set`, read the key's current value (`SPRINT_PLAN status` or the file) and refuse to write a lower rank (`backlog < ready-for-dev < in-progress < review < done`) — the one exception is the Rework Loop's re-open of a `done` story (its step 1), logged `rework_opened`. `--set` on a key that is not in the generated plan fails (`ok: false`, "not in the generated plan") and writes nothing — a story must exist in the epic file first. Preserves comments; reports `explicit_set`. Use `--dry-run` when unsure. (`<epic-file>` may repeat for multi-file epics; `<project_name>`, `<impl>` and `<planning>` are the resolver's values from the shorthand paragraph above.)
+- `SPRINT_PLAN generate --epic-file <planning>/epics.md --status-file <impl>/sprint-status.yaml --stories-dir <impl> --project <project_name> --date "<MM-DD-YYYY HH:MM>" --set <key>=<status> [--set …]` → the lead's ONLY sanctioned status writer. The merge itself never downgrades, but **`--set` is the script's repair path and is applied unconditionally — it WILL downgrade.** Before every `--set`, read the key's current value (`SPRINT_PLAN status` or the file) and refuse to write a lower rank (`backlog < ready-for-dev < in-progress < review < done`) — the exceptions are the Rework Loop's re-open of a `done` story (its step 1), logged `rework_opened`, and an unattended set-aside (doctrine U4). `--set` on a key that is not in the generated plan fails (`ok: false`, "not in the generated plan") and writes nothing — a story must exist in the epic file first. Preserves comments; reports `explicit_set`. Use `--dry-run` when unsure. (`<epic-file>` may repeat for multi-file epics; `<project_name>`, `<impl>` and `<planning>` are the resolver's values from the shorthand paragraph above.)
 
 ## Task Sequence
 
@@ -832,8 +1470,8 @@ If `Agent` is a deferred tool, load its schema via `ToolSearch` with `"select:Ag
 
 1. **Lead** asserts the branch, writes the `stage_spawned stage=plan …` write-ahead entry to the cycle log, and makes the bookkeeping commit (Rule 16 — the tree MUST be clean before every `bmad-build-auto` dispatch). Every later stage spawn (implement, qa, code-review) is preceded by its own `stage_spawned` entry the same way.
 2. Agent — **PLAN**: `/bmad-build-auto` on the Opus tier, prompt = the explicit sprint-status story key plus `Halt after planning.`, plus the story's **ledger inbox** (`LEDGER slice <key>` pasted in — every entry addressed in Tasks & Acceptance or declined under Design Notes with a reason; Rule 17 (1b)). It writes `spec-{key}.md` and halts with status `ready-for-dev`. **Lead captures the spec path** and logs `story_created`. The plan does not wait on the previous story's CI run — a plan writes a spec, not code, so it cannot build on a red (see step 4).
-3. **Lead** gates the spec: Integration-AC validation (Rules 1/2), AD mapping against the spine (Rule 6), sections the template may have deleted, decision dependency (a spec that builds on a `decision-pending` ledger entry is an intent gap for the user NOW, not at the merge gate); logs `spec_validated`; sets the story `ready-for-dev` via `SPRINT_PLAN generate --set`; bookkeeping commit (everything under `implementation-artifacts`: spec, log, tracker).
-4. **Lead** resolves the previous story's `ci=pending` (see "CI Is a Gate", resolution point 1) — a red reworks that story first while this story's spec waits at `ready-for-dev`. Then the lead sets the story `in-progress` (+ `epic-{N}` lift) via `SPRINT_PLAN`, bookkeeping commit; then Agent — **IMPLEMENT**: `/bmad-build-auto` on the Sonnet tier, prompt = the spec path. It implements (via its handoff subagent), self-reviews with its review layers, finalizes the spec `status: done`, and makes a local commit. **Lead** reads the spec frontmatter (`baseline_revision`; accept `baseline_commit` if a newer build-auto writes that key instead — the retrospective skill already calls `baseline_revision` deprecated), harvests `deferred:` into the ledger — each item born with an owner via `LEDGER new` (Rule 15) — sets the story `review` via `SPRINT_PLAN`, and logs `dev_complete` with `build_sha=`. The story's FIRST `dev_complete` also logs `story_base=<baseline_revision>`: every rework overwrites `baseline_revision`, so the gates that judge the story's whole delivered scope — adjudication, smoke, the fresh-environment check — diff from `story_base`; only the scoped re-review uses the rework's own baseline.
+3. **Lead** gates the spec: Integration-AC validation (Rules 1/2), AD mapping against the spine (Rule 6), sections the template may have deleted, decision dependency (a spec that builds on a `decision-pending` ledger entry is an intent gap for the user NOW, not at the merge gate — *Unattended:* ruled or parked, U5); logs `spec_validated`; sets the story `ready-for-dev` via `SPRINT_PLAN generate --set`; bookkeeping commit (everything under `implementation-artifacts`: spec, log, tracker).
+4. **Lead** resolves the previous story's `ci=pending` (see "CI Is a Gate", resolution point 1) — a red reworks that story first while this story's spec waits at `ready-for-dev`. Then the lead sets the story `in-progress` (+ `epic-{N}` lift) via `SPRINT_PLAN`, bookkeeping commit; then Agent — **IMPLEMENT**: `/bmad-build-auto` on the Sonnet tier, prompt = the spec path. It implements (via its handoff subagent), self-reviews with its review layers, finalizes the spec `status: done`, and makes a local commit. **Lead** reads the spec frontmatter (`baseline_revision`; accept `baseline_commit` if a newer build-auto writes that key instead — the retrospective skill already calls `baseline_revision` deprecated), harvests `deferred:` into the ledger — each item born with an owner via `LEDGER new` (Rule 15) — sets the story `review` via `SPRINT_PLAN`, and logs `dev_complete` with `build_sha=`. The story's FIRST `dev_complete` also logs `story_base=<baseline_revision>` (the commit its first implement `stage_spawned` recorded; an unattended pick-up logs a new one — doctrine U4 — and the gates then use the latest): every rework overwrites `baseline_revision`, so the gates that judge the story's whole delivered scope — adjudication, smoke, the fresh-environment check — diff from `story_base`; only the scoped re-review uses the rework's own baseline.
 5. **Lead** executes any AD-tooled AC verifications, each with a named, applied, and reverted mutation (Rule 19 — a pass without one is `unverified`; see "AD-Aware Execution").
 6. Agent: `/bmad-qa-generate-e2e-tests` (scope pre-answered to this story's deliverable = `git diff --name-only <baseline_revision>..HEAD`; one demonstrated mutation per AC, Rule 19).
 7. Agent: `/bmad-code-review` on the Opus tier, with the spec path as the explicit argument (`review_mode = full`). After it returns: `SPRINT_PLAN validate` (the skill's own sprint-status sync is pre-answered to the script, but verify) and `grep -c "^## Deferred from:" <impl>/deferred-work.md` — if that count grew, the reviewer ignored the ledger pre-answer: harvest each stray bullet with `LEDGER new … cr`, strip the stray block (the one sanctioned edit — those bullets are not DW entries), and log `ledger_stray_bullets harvested=N`. Copy the reviewer's `entries:` line into `cr_complete` (root-cause counts, `rows=`, `unresolved_high_med=`). If the review leaves the story `in-progress` (a HIGH, or — first review only — an unpatched in-story MED), run the Rework Loop (max 3 iterations; each re-review scoped to the rework; a re-review with no HIGH closes the story) before proceeding.
@@ -855,7 +1493,7 @@ A story therefore produces several commits on the epic branch: bookkeeping commi
 
 Each pipeline-stage task is delegated via the `Agent` tool. Lead-side skills (sprint planning, retrospective) are invoked directly via the `Skill` tool. Story planning is a **spawned** stage in v6.11 (`bmad-build-auto` never advances to another story, so the old race-ahead concern that kept story creation lead-side is gone) — what stays lead-side is the *validation* of the plan. For `bmad-build-auto` stages the completion contract is the spec file (frontmatter `status` + `## Auto Run Result`), not prose. For QA/CR stages, if a return is missing closing-summary sections, the lead extracts the file list from `git status --short` plus `git diff --name-only <baseline_revision>..HEAD` — this is normal extraction.
 
-`/bmad-code-review` triages findings into **decision-needed / patch / defer / dismiss** buckets at **low / medium / high** severity. Under `/epic-cycle` the review agent applies every patch-bucket finding and resolves decision-needed items using best judgment plus the BMAD skill rules; only a genuine user-preference or spec-contradiction question comes back as `## Clarification Needed`. The BMAD skills must be invoked via `Skill`; don't skip steps. `/bmad-retrospective` is the one deliberate human-in-the-middle exception to the autonomous loop — it MUST run in interactive mode, and every one of its elicitation stops must reach the user.
+`/bmad-code-review` triages findings into **decision-needed / patch / defer / dismiss** buckets at **low / medium / high** severity. Under `/epic-cycle` the review agent applies every patch-bucket finding and resolves decision-needed items using best judgment plus the BMAD skill rules; only a genuine user-preference or spec-contradiction question comes back as `## Clarification Needed`. The BMAD skills must be invoked via `Skill`; don't skip steps. `/bmad-retrospective` is the one deliberate human-in-the-middle exception to the autonomous loop — it MUST run in interactive mode, and every one of its elicitation stops must reach the user (*Unattended:* headless, `-H <epic>`, doctrine U9).
 
 ## Permission Mode (Critical)
 
@@ -873,7 +1511,7 @@ Pipeline-stage subagents must be spawned **synchronously** — never backgrounde
 - `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS` — 20 running subagents per session by default, nested ones included; over it an `Agent` call fails with `Concurrent subagent limit reached`. A parallel run's peak is about `max_parallel_epics` × (runner + stage + its review layers).
 - Headless launches (`claude -p`) only: `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0`, or the process stops waiting for background runners after 10 idle minutes.
 
-**Supervised, not unattended.** "Unattended" describes the permission mode, not the loop. Measured on a greenfield epic (field report 2026-08-29: 8 stories, 9 clarifications, 7 user decisions, zero false halts) the pipeline needs roughly **one human round trip per story**, peaking where planning artifacts meet reality for the first time, plus one decision sheet at each epic's merge gate. Every one of those halts is load-bearing: a run launched by someone who expects to walk away will experience correct behaviour as a malfunction, and the tempting reactions — pre-authorizing everything, widening footprints blindly — are worse than the wait. The levers that reduce the rate without reducing the halts are Rule 5's apply-and-report tier (amendments that preserve intent are applied, then reviewed) and Rule 11's authority/concurrency split (parallel kit); the halts themselves are not tunable.
+**Supervised, not unattended.** "Unattended" describes the permission mode, not the loop. Measured on a greenfield epic (field report 2026-08-29: 8 stories, 9 clarifications, 7 user decisions, zero false halts) the pipeline needs roughly **one human round trip per story**, peaking where planning artifacts meet reality for the first time, plus one decision sheet at each epic's merge gate. Every one of those halts is load-bearing: a run launched by someone who expects to walk away will experience correct behaviour as a malfunction, and the tempting reactions — pre-authorizing everything, widening footprints blindly — are worse than the wait. The levers that reduce the rate without reducing the halts are Rule 5's apply-and-report tier (amendments that preserve intent are applied, then reviewed) and Rule 11's authority/concurrency split (parallel kit); the halts themselves are not tunable. **`--unattended` changes this for the development loop only:** setup still stops, while the owner is present; after it, the loop decides small questions, parks owner-only ones and keeps going, under the project's policy (`_bmad/custom/unattended.yaml`) and the doctrine. The halts become inbox items and veto-window rulings the owner reviews with `/epic-cycle --review`.
 
 ## Model Strategy (Critical for cost + quality)
 
@@ -934,7 +1572,7 @@ Each pipeline-stage subagent is a single `Agent` tool call. The `Agent` tool ret
 For each pipeline stage, the lead:
 
 1. **Resolves the stage's model.** Resolution order: (a) if `_bmad/custom/model-overrides.yaml` exists and its `overrides:` map names the **stage** (`plan` | `implement` | `qa` | `code-review`), that wins unconditionally (project model policy — see Model Strategy); (b) else if the stage skill's YAML frontmatter — `.claude/skills/<skill-name>/SKILL.md`, or the plugin-namespaced install path — declares a `model:` field (e.g. `opus` / `sonnet` / `haiku`), that wins for every stage except `implement` (a `bmad-build-auto` pin documents the plan tier only); (c) otherwise use the Model Strategy map above (plan → `opus`, implement → `sonnet`, qa → `sonnet`, code-review → `opus`); (d) for a stage not in the map, omit the parameter and let the sub-agent inherit the lead's model. Read the actual file and frontmatter — do not assume. On a vanilla BMAD install (c) is the operative source (upstream v6.11 still ships no `model:` frontmatter); projects that ran a model-pinning pass over their skills resolve via (b), and the pins normally agree with the map.
-2. **Writes the `stage_spawned` entry** (`stage=<plan|implement|qa|code-review> spawn_at=<UTC> model=<resolved> agent_name=<name passed on the Agent call> cycle_iteration=N`) to the cycle log IMMEDIATELY before the call — never after. Then, if the stage is `bmad-build-auto`, **ensures the tree is clean** (Rule 16): every pending bookkeeping write including this entry is committed first; `git status --short` must be empty in the stage's working directory (and in every mounted submodule) — the one exception is the review-step intent-gap patch re-dispatch (re-dispatch protocol, step 2), whose applied patch stays uncommitted by design. An open `stage_spawned` (no closing success entry, no `<stage>_clarification_requested`) is the only durable evidence that a stage may be in flight — resume reads it before any re-dispatch.
+2. **Writes the `stage_spawned` entry** (`stage=<plan|implement|qa|code-review> spawn_at=<UTC> model=<resolved> agent_name=<name passed on the Agent call> cycle_iteration=N`; a story's first implement spawn — and, under `--unattended`, its first after a set-aside or a re-plan — also carries `story_base=<HEAD sha>`) to the cycle log IMMEDIATELY before the call — never after. Then, if the stage is `bmad-build-auto`, **ensures the tree is clean** (Rule 16): every pending bookkeeping write including this entry is committed first; `git status --short` must be empty in the stage's working directory (and in every mounted submodule) — the one exception is the review-step intent-gap patch re-dispatch (re-dispatch protocol, step 2), whose applied patch stays uncommitted by design. An open `stage_spawned` (no closing success entry, no `<stage>_clarification_requested`) is the only durable evidence that a stage may be in flight — resume reads it before any re-dispatch.
 3. **Spawns** the subagent via `Agent` with `name: "<story-key>-<stage>-<iteration>"` (the `agent_name` recorded above — pass `name` only when the tool's schema offers it; the log entry identifies the stage either way) and:
    - `subagent_type: "general-purpose"` (required for `bmad-build-auto` stages — they spawn their own subagents)
    - `model: <the model resolved in step 1>` — pass this so the stage runs on the model the pipeline intends, NOT the lead's inherited model. Omit the parameter only when step 1 resolved nothing (stage not in the map and no frontmatter declaration).
@@ -943,7 +1581,7 @@ For each pipeline stage, the lead:
    - `description: <3-5 word task description>`
    - `prompt: <full task — see Spawn Prompt Skeleton below>`
 4. **Reads the result.** For `bmad-build-auto` stages: re-read the spec file from disk — frontmatter `status` (`ready-for-dev` after a plan spawn; `done` after an implement spawn; `blocked` otherwise) and the `## Auto Run Result` section (`Status:` / `Blocking condition:`); the agent's prose is advisory. For QA/CR stages: the returned message's closing-summary sections (`## Files Modified`, `## Tests Added`, `## Decisions`, `## Issues Encountered`).
-   **A harness error is not a stage result.** If the `Agent` result is an error from the harness rather than the stage's report — `Agent terminated early due to an API error: …`, or a rate-limit, overload, or usage-limit message — the stage did not finish. Log `stage_api_error stage=<stage> error=<rate_limit|overload|usage_limit|other>`; wait (rate limit or overload: about 5, then 10, then 20 minutes; a spend or usage limit: STOP and surface it to the user — waiting will not clear it); then re-spawn the stage per the **Re-dispatch protocol** ("Clarification protocol"): its open `stage_spawned` entry stands, a `bmad-build-auto` stage resumes from the spec's `status`, and the tree is checked first — a stage cut off mid-edit can leave changes behind, which Rule 18 (4)'s quiescence samples and the Rule 16 clean-tree gate catch. It is never a failed story and never a rework iteration. (Field report 2026-10-10: at least seven runner kills from rate limits or quota in one month-long run.)
+   **A harness error is not a stage result.** If the `Agent` result is an error from the harness rather than the stage's report — `Agent terminated early due to an API error: …`, or a rate-limit, overload, or usage-limit message — the stage did not finish. Log `stage_api_error stage=<stage> error=<rate_limit|overload|usage_limit|other>`; wait (rate limit or overload: about 5, then 10, then 20 minutes; a spend or usage limit: STOP and surface it to the user — waiting will not clear it; *Unattended:* hold, U11); then re-spawn the stage per the **Re-dispatch protocol** ("Clarification protocol"): its open `stage_spawned` entry stands, a `bmad-build-auto` stage resumes from the spec's `status`, and the tree is checked first — a stage cut off mid-edit can leave changes behind, which Rule 18 (4)'s quiescence samples and the Rule 16 clean-tree gate catch. It is never a failed story and never a rework iteration. (Field report 2026-10-10: at least seven runner kills from rate limits or quota in one month-long run.)
 5. **Falls back** to `git diff --name-only <baseline_revision>..HEAD` + `git status --short` if closing sections are missing.
 6. **Records** the stage in the cycle log, setting `model=<the model the sub-agent actually ran on>` (the resolved stage model, or the inherited lead model when none was declared) per the telemetry spec.
 7. **Proceeds** to the next stage. No shutdown step.
@@ -962,6 +1600,8 @@ Every Agent spawn prompt must include, in this order:
 6. The stage-specific rule block (see below) — for QA/CR including its **pre-answered checkpoints**: every interactive menu/halt the skill will hit, with the chosen option, so the agent never waits on input that cannot arrive (Rule 9). `bmad-build-auto` has no checkpoints; its block carries rules only.
 7. The completion-contract directive — for QA/CR quote the closing-summary section names inline; for `bmad-build-auto` state that the spec file's frontmatter `status` + `## Auto Run Result` is the contract and that the agent must not push.
 8. Skill-specific context.
+
+**Unattended runs:** after these items, append the `## Unattended run` block the doctrine renders from the policy (U6); the policy's `stage_preamble`, when set, heads the prompt instead.
 
 ### Stage-specific rule blocks (copy into spawn prompts)
 
@@ -1113,6 +1753,8 @@ Rework re-review (iteration <k> of 3): the spec's `baseline_commit` is the REWOR
 
 ### Clarification protocol
 
+*Unattended:* the lead classifies and rules or parks instead of surfacing (doctrine U5); the re-spawn mechanics below are unchanged.
+
 If an agent returns with a `## Clarification Needed` section instead of the closing summary, the lead:
 
 1. Reads the question from the returned message.
@@ -1122,6 +1764,8 @@ If an agent returns with a `## Clarification Needed` section instead of the clos
 5. Logs `<stage>_clarification_requested` before the re-spawn; the re-spawn's normal success entry (`story_created` / `dev_complete` / `qa_complete` / `cr_complete`) closes it.
 
 **`bmad-build-auto` results map onto this protocol by blocking condition** (read from the spec's `## Auto Run Result`; the plan/implement stages emit no `## Clarification Needed` section):
+
+*Unattended:* each "surface to the user" in this table is classified instead (doctrine U5): non-convergence is the rework cap, an intent gap is a clarification.
 
 | Spec `status` / blocking condition | Lead action |
 | --- | --- |
@@ -1137,7 +1781,7 @@ If an agent returns with a `## Clarification Needed` section instead of the clos
 **Re-dispatch protocol (any re-spawn after a `blocked` result).** build-auto routes strictly by the spec's frontmatter `status`: `draft` → plan, `ready-for-dev` / `in-progress` → implement, `in-review` → review, `done` → follow-up review pass, `blocked` → HALT `blocked spec supplied`. So a re-spawn on an unchanged `blocked` spec can never proceed, and a re-spawn with the **story key** while a spec already exists resumes it only if it is still `draft` — at any other status the skill creates `spec-<key>-2.md` and ignores the edited file. Therefore, before every re-dispatch:
 
 1. Apply the answer to the spec. For a **plan-stage** halt the answer usually belongs inside the `<intent-contract>` block (build-auto preserves that block verbatim when it resumes a `draft`) and/or `## Design Notes`; for an **implement-stage** halt it belongs in the non-frozen sections (`## Design Notes`, `## Tasks & Acceptance`, `## Spec Change Log`). Note the change in `## Spec Change Log`. If the answer has architectural weight, write it into the spine first (Rule 20) and cite the AD id.
-2. Reset the frontmatter `status`: `draft` to re-plan (the next run re-derives the spec around the preserved intent block and honours `Halt after planning.`); `in-progress` (or `ready-for-dev`) to re-implement. **Exception — an `intent gap` raised at build-auto's review step** (the spec's `## Review Triage Log` entry names a saved patch file under `<impl>`): the skill saved the attempted change as that patch and reverted the code, so do not re-implement — after applying the amendment, `git apply <patch>`, verify it applied cleanly, set `status: in-review`, and the re-spawn resumes at review with the work intact (the 2026-08-29 field report's "expensive mid-implement halt" is exactly this case). This one dispatch is exempt from the clean-tree gate: the applied patch is source code, which a bookkeeping commit never stages — commit only the spec and the log, then spawn. A spec-path dispatch skips build-auto's own tree check, its review diffs from the spec's baseline (which covers the applied patch), and its finalize commits the patch with the rest of the reviewed diff.
+2. Reset the frontmatter `status`: `draft` to re-plan (the next run re-derives the spec around the preserved intent block and honours `Halt after planning.`); `in-progress` (or `ready-for-dev`) to re-implement. **Exception — an `intent gap` raised at build-auto's review step** (the spec's `## Review Triage Log` entry names a saved patch file under `<impl>`): the skill saved the attempted change as that patch and reverted the code, so do not re-implement — after applying the amendment, `git apply --whitespace=nowarn <patch>` (byte for byte, whatever `apply.whitespace` says), verify it applied cleanly, set `status: in-review`, and the re-spawn resumes at review with the work intact (the 2026-08-29 field report's "expensive mid-implement halt" is exactly this case). This one dispatch is exempt from the clean-tree gate: the applied patch is source code, which a bookkeeping commit never stages — commit only the spec and the log, then spawn. A spec-path dispatch skips build-auto's own tree check, its review diffs from the spec's baseline (which covers the applied patch), and its finalize commits the patch with the rest of the reviewed diff.
 3. Bookkeeping commit (Rule 16).
 4. Re-spawn the same stage **on the spec path** — never on the story key once a spec exists, and **never by `SendMessage` to the old stage agent**. Its `Agent` return value was its completion signal; an agent "resumed" after returning is alive with no durable record of it (no open `stage_spawned`), invisible to resume detection, and a de-facto background stage. The re-spawn's apparent cost is the price of durability: the answer lives in the spec, not in a chat message, so the story survives a crash between the answer and the re-spawn.
 
@@ -1182,7 +1826,7 @@ For each epic in range:
   Lead: LEDGER load → re-own every owner=none entry (append owner=<story key>|burndown) → logs ledger_load   # see Ledger Drain
     (a legacy-grammar ledger — no `### DW-` headings — HALTS here: run the Step-1 migration first)
   Lead executes /bmad-sprint-planning via Skill tool, HEADLESS, with "Ledger load: <the load line>" in its argument; parses the trailing JSON:
-    gate=FAIL or status=blocked → STOP; surface findings (and the saved implementation-readiness.md if written)
+    gate=FAIL or status=blocked → STOP; surface findings (and the saved implementation-readiness.md if written)   # Unattended: at a later epic's start, FAIL stops that epic (U8)
     gate=CONCERNS → surface once; continue
     gate=PASS → continue
   Lead logs sprint_planning_complete gate=<PASS|CONCERNS>
@@ -1236,7 +1880,7 @@ For each epic in range:
       Lead re-runs AD verifications if rework touched AD-constrained ACs; SPRINT_PLAN generate --set <key>=review
       Lead sets spec baseline_commit = this rework's baseline_revision (scoped re-review: <rework baseline>..HEAD, never the whole story again); re-spawns /bmad-code-review with the "Rework re-review" block → logs cr_complete
       A re-review that finds no HIGH closes the story (remaining MEDs routed/escalated with owners) — the loop exits here even if MEDs remain (Rule 15 exit condition)
-    If still in-progress after 3 iterations: STOP; logs rework_cap_reached; surface outstanding findings to user — an override is accepted only with a finite item list and closes at the next review without HIGH (rework_cap_override items=… close=…; see Rework Loop)
+    If still in-progress after 3 iterations (Unattended: no override — stop the story, set it aside; U4-U5): STOP; logs rework_cap_reached; surface outstanding findings to user — an override is accepted only with a finite item list and closes at the next review without HIGH (rework_cap_override items=… close=…; see Rework Loop)
     Lead adjudicates LEDGER slice <key> against delivered scope (resolved-by | re-own | terminal) until empty; logs ledger_adjudicated   # Rule 17
     Lead performs per-story smoke (lead-side); logs smoke_complete
     Lead runs the fresh-environment check (the story's added + changed tests on a fresh environment, forward then reversed — Rule 19); logs fresh_check; red → failed-smoke path
@@ -1255,14 +1899,14 @@ For each epic in range:
             logs ledger_burndown_complete open_before= resolved= terminal= chartered= chartered_size= overflow= reowned= to_decision_sheet= open_after= cap= story_max= filed_this_epic= closed_this_epic= drain_ratio=
   Lead: SPRINT_PLAN generate --set epic-{N}=done (no skill writes this transition); bookkeeping commit; logs epic_status_done
   Lead evaluates this epic's cycle log against the escalation / de-escalation / rollback thresholds — EVERY project; logs model_tier_checkpoint armed=<bool> result=…
-    result=recommend_escalate|offer_mixed → surface evidence to the user; on approval (creating model-overrides.yaml if absent): update overrides+history; logs model_tier_changed
+    result=recommend_escalate|offer_mixed → surface evidence to the user; on approval (creating model-overrides.yaml if absent): update overrides+history; logs model_tier_changed   # Unattended: recorded, never applied (U5)
     result=revert_required (mixed active, smoke defects) → mandatory: update the file; logs model_tier_changed
-  Lead pauses: "Run a retrospective?"   # human-in-the-middle gate — never auto-answered, never times out into a default
+  Lead pauses: "Run a retrospective?"   # human-in-the-middle gate — never auto-answered, never times out into a default (Unattended: headless -H <epic>, verdict read; U9)
     If yes → /bmad-retrospective via Skill tool, fully interactive (all WAITs reach the user), with the burn-down counts in its argument; logs epic_retro_complete
     If no  → logs epic_retro_skipped reason=user_declined
-  Lead presents the epic-close decision sheet (Rule 17 (5)): every escalated + decision-pending entry, one sitting, recommended disposition each
+  Lead presents the epic-close decision sheet (Rule 17 (5)): every escalated + decision-pending entry, one sitting, recommended disposition each   # Unattended: classified; owner-only → inbox (U9)
     → writes the answers as by=merge_gate trailer lines (human-owned → action_items + dropped note=action_item); bookkeeping commit; logs decision_sheet_recorded
-  Lead pauses: "Merge {TICKET}-epic{N} → feature, delete {TICKET}-epic{N}?" → if yes:
+  Lead pauses: "Merge {TICKET}-epic{N} → feature, delete {TICKET}-epic{N}?" → if yes:   # Unattended: when_green, integrate forward first (U9)
     Logs epic_merge_started head=<CI-verified sha> on the epic branch; bookkeeping commit (the merge carries it to origin)   # the write-ahead marker
     If ideSync: set objectscript.conn.active = false   # >>> Window B start — wraps the merge branch ops
     For each affected repo, submodules-first then parent:
@@ -1297,7 +1941,7 @@ Concurrency therefore lives one level up — the parallel kit's per-epic worktre
 2. Re-spawn `/bmad-build-auto` on the spec (Sonnet tier, `cycle_iteration` incremented) **with the "Rework re-dispatch" block appended** to the implement spawn prompt. Its resume table routes `in-progress` → implement — a first pass from the skill's point of view (its `followup_pass` is set only for a `done` spec, so without the block every rework ran as a first pass and its convergence clause never engaged): the block pre-answers step-04's follow-up recommendation as a follow-up pass and confines the work to the open items. It captures a new `baseline_revision` (after the rework commit), works the open tasks, self-reviews, finalizes `status: done`, commits. Harvest `deferred:`; log `dev_complete` (its `followup_review_recommended` is now meaningful: `true` only if the pass patched a HIGH).
 3. Re-run AD-tooled verifications if the rework touched AD-constrained ACs. Then `SPRINT_PLAN generate --set <key>=review` (the previous code review moved the tracker to `in-progress`; the re-review expects `review`).
 4. Re-spawn `/bmad-code-review` **scoped to the rework** — set the spec's `baseline_commit` to THIS rework's `baseline_revision` (the skill's step-01 uses that key as its diff baseline, so the reviewer diffs `<rework baseline>..HEAD` + working tree) and append the "Code-review re-spawn on rework" block: the previous round's unresolved items as its checklist, the original baseline for context, findings outside the rework range only when HIGH, and the exit condition. The whole story was reviewed once, at round 1; re-reading it after every rework re-samples the same finding distribution (and blows through the skill's own ~3,000-line chunking guard — field report 2026-09-11: round 3 re-read 7,247 lines for 0 HIGH). Fresh eyes on old code always find something tolerable.
-5. **Cap: 3 rework iterations.** Non-convergence after 3 → STOP, log `rework_cap_reached outstanding=<csv>`, and surface the outstanding findings to the user (mirrors `bmad-build-auto`'s own 5-iteration review-repair cap). Endless implement↔review ping-pong is a signal the spec is wrong, not the code. **Cap override contract:** the lead accepts an override only as `rework_cap_override cap=3 used=3 authorized_by=user items=<finite csv of finding / DW ids> close=next_review_without_high` — an open-ended instruction ("continue until complete") is answered with the item list to confirm, never acted on; the extra iteration works exactly those items, and the story closes at its next review unless that review finds a HIGH.
+5. **Cap: 3 rework iterations.** (*Unattended:* no override — the story stops and is set aside, doctrine U4–U5.) Non-convergence after 3 → STOP, log `rework_cap_reached outstanding=<csv>`, and surface the outstanding findings to the user (mirrors `bmad-build-auto`'s own 5-iteration review-repair cap). Endless implement↔review ping-pong is a signal the spec is wrong, not the code. **Cap override contract:** the lead accepts an override only as `rework_cap_override cap=3 used=3 authorized_by=user items=<finite csv of finding / DW ids> close=next_review_without_high` — an open-ended instruction ("continue until complete") is answered with the item list to confirm, never acted on; the extra iteration works exactly those items, and the story closes at its next review unless that review finds a HIGH.
 
 **Decisions do not re-open a reviewed story.** A check-in answer or a decision-sheet call on one of this story's `escalated` / `decision-pending` entries, taken after a review that found no HIGH, becomes a `DW-n:` acceptance bullet on a named later story or the burn-down story (Rule 17 (1b)) — not a rework of this one. If the story is still inside its loop (a HIGH outstanding), the decision's items ride along in the current iteration's `items=` list.
 
@@ -1319,7 +1963,7 @@ Only a story at `done` proceeds to smoke + commit.
 | `epic-{N}-retrospective: optional → done`, `action_items` append | `/bmad-retrospective` via its `sprint_status.py update` |
 | **epic `in-progress → done`** (after the last story reaches `done`) | **the lead** — `--set epic-{N}=done`; log `epic_status_done` |
 
-Status enum (kebab-case, unchanged in BMAD v6.11): story `backlog → ready-for-dev → in-progress → review → done`; epic `backlog → in-progress → done`; retrospective `optional → done`; action items `open → in-progress → done`; legacy aliases `drafted` ≡ `ready-for-dev`, `contexted` ≡ `in-progress` (normalized by the script). Never downgrade a status, except the Rework Loop's re-open of a `done` story — `--set` would happily do it (it is the script's repair path), so read before you write; never hand-edit the YAML.
+Status enum (kebab-case, unchanged in BMAD v6.11): story `backlog → ready-for-dev → in-progress → review → done`; epic `backlog → in-progress → done`; retrospective `optional → done`; action items `open → in-progress → done`; legacy aliases `drafted` ≡ `ready-for-dev`, `contexted` ≡ `in-progress` (normalized by the script). Never downgrade a status, except the Rework Loop's re-open of a `done` story and an unattended set-aside — `--set` would happily do it (it is the script's repair path), so read before you write; never hand-edit the YAML.
 
 **Do not confuse the two status vocabularies.** The spec file's frontmatter `status` is `bmad-build-auto`'s machine state: `draft | ready-for-dev | in-progress | in-review | done | blocked`. `in-review` (spec, mid-self-review) is NOT `review` (sprint-status, awaiting code review), and a spec at `done` means "build-auto finished", not "story done" — the story is `done` only when `bmad-code-review` says so. Never copy one vocabulary into the other.
 
@@ -1340,7 +1984,7 @@ The smoke is not a substitute for automated tiers; it's the final check that the
 
 1. After `cr_complete` (HIGH/MED resolved), determine the smoke method from the story's diff (`git diff --name-only <story_base>..HEAD`) plus the spec's Tasks & Acceptance / I/O matrix.
 2. Execute, capture evidence (screenshots, stdout, response body).
-3. On failure: do NOT commit as-is. Either (a) surface to user, or (b) treat the failure as an unresolved HIGH finding and run one Rework Loop iteration (re-open the spec with the failure as a `[Smoke]` task, rework commit, implement re-spawn, code-review re-spawn) then re-smoke. Failed smoke is HIGH, never deferrable.
+3. On failure: do NOT commit as-is (*Unattended:* always (b)). Either (a) surface to user, or (b) treat the failure as an unresolved HIGH finding and run one Rework Loop iteration (re-open the spec with the failure as a `[Smoke]` task, rework commit, implement re-spawn, code-review re-spawn) then re-smoke. Failed smoke is HIGH, never deferrable.
 4. On success: log `<UTC> TAB Story <id> TAB smoke_complete TAB method=<browser|cli|api|other> result=pass iterations=<N> defects_caught=<N> evidence=<path-or-summary> model=<lead-model>`. `iterations` is 1 for first-run pass, bump on re-smoke. `defects_caught` = count of bugs the smoke caught that automated tiers passed.
 5. Run the fresh-environment check below, then proceed to commit.
 
@@ -1358,9 +2002,9 @@ Every quality gate in this pipeline runs the suite locally; none of them is the 
 
 **Resolution points — each logs `ci_resolved story=<id> run=<id> result=<success|failure|cancelled>`:** (1) before the next story's implement spawn (Task Sequence per-story step 4) — the next story's plan, spec validation and spec gate proceed meanwhile, and a red reworks the previous story first while the new spec waits at `ready-for-dev` (field report 2026-10-10: waiting at the plan spawn idled the lead about 30 minutes per story); (2) at the burn-down gate; (3) at SC-4 / SC-4-P as the merge precondition (`ci_green_verified` on the branch head, or `merge_gate_blocked reason=ci_red`); (4) at resume (cross-stage integrity check 6). `gh run view <id> --json status,conclusion`; still `in_progress` → wait here, with jitter, up to the project's usual run time.
 
-**On `failure` — classify first, then act; log `ci_red_classified run=<id> class=<story|flake|infra> test=<name|none>`.** `infra`: the run failed before any test ran (runner lost, image-pull or registry limit, network, provisioning) — retry it on a timer (about 10, 20, then 40 minutes) and never count it as rework; three infra reds in a row → surface to the user. `flake`: the failing test already has an open `flake:` ledger entry, or it fails and then passes on one unchanged rerun — rerun once, and file a `flake: <test>` ledger entry (or append an `occurrence=`) routed to the burn-down with priority; the same test red twice on the same head is `story`. `story`: anything else — the path that follows. (Field report 2026-10-10: five different flaky tests forced reruns in two days, and one merge needed five attempts — a flake, then three registry pull-limit failures in which no test ran.)
+**On `failure` — classify first, then act; log `ci_red_classified run=<id> class=<story|flake|infra> test=<name|none>`.** `infra`: the run failed before any test ran (runner lost, image-pull or registry limit, network, provisioning) — retry it on a timer (about 10, 20, then 40 minutes) and never count it as rework; three infra reds in a row → surface to the user (*Unattended:* re-run and poll, then doctrine U5's CI rows). `flake`: the failing test already has an open `flake:` ledger entry, or it fails and then passes on one unchanged rerun — rerun once, and file a `flake: <test>` ledger entry (or append an `occurrence=`) routed to the burn-down with priority; the same test red twice on the same head is `story`. `story`: anything else — the path that follows. (Field report 2026-10-10: five different flaky tests forced reruns in two days, and one merge needed five attempts — a flake, then three registry pull-limit failures in which no test ran.)
 
-**On a `story` red:** if the failing job's first red commit is the story just committed → a HIGH finding against it, never deferrable, same path as a failed smoke: re-open the spec with `- [ ] [CI] <job>: <failure summary> — <link>` under Tasks & Acceptance, rework commit, implement re-spawn, code-review re-spawn, re-smoke, re-commit, new `ci=pending`. If the red predates the story (inherited) → surface to the user with the run link and the first red sha; do not start new work on a red branch. `cancelled` → re-check the latest run for the branch head before deciding.
+**On a `story` red:** if the failing job's first red commit is the story just committed → a HIGH finding against it, never deferrable, same path as a failed smoke: re-open the spec with `- [ ] [CI] <job>: <failure summary> — <link>` under Tasks & Acceptance, rework commit, implement re-spawn, code-review re-spawn, re-smoke, re-commit, new `ci=pending`. If the red predates the story (inherited) → surface to the user with the run link and the first red sha; do not start new work on a red branch (*Unattended:* rerun, then at most one fix-forward per root cause, else stop the epic — U5). `cancelled` → re-check the latest run for the branch head before deciding.
 
 **Runner mode (parallel kit):** identical inside the worktree; the completion contract carries `ci: <success|none|unavailable> run=<id>` for `head:`, and the orchestrator verifies it independently before the merge gate.
 
@@ -1370,7 +2014,7 @@ Every quality gate in this pipeline runs the suite locally; none of them is the 
 
 The deferred-work ledger has as many drains as it has inflows, and every drain is a logged stage. The lead never opens `deferred-work.md`; every read is `LEDGER load|slice|show` and every write is `LEDGER new|append` (see the shorthand under Pre-flight; grammar and vocabulary in Rule 15).
 
-**Epic start — `ledger_load` (before sprint planning).** `LEDGER load`. If the file exists but `total=0` while `grep -c "^### DW-"` is 0 and the file is non-empty, it is a legacy-grammar ledger — HALT and run the kit's Step-1 migration. Re-own every `owner:none` entry (`LEDGER slice none`; `append DW-n "owner=<story key in this epic|burndown> by=load note=…"`). **Repair every `UNKNOWN` owner** (`load` marks them; `LEDGER slice unknown` lists them): take the owner's `<epic>-<story>-` prefix and look it up in `SPRINT_PLAN status` / the tracker — exactly one key with that prefix → `append DW-n "owner=<that key> by=load note=retitle_repair"`; zero or several → HALT and surface (`ledger_owner_repaired repaired=N halted=N`). An entry on a key no gate will ever query is the silent failure this check exists for. Log `ledger_load total= open= routed= escalated= decision_pending= terminal= owner_unknown= burndown=<owner:burndown count>`; put the same line into the headless sprint-planning argument (`Ledger load: …`) so the readiness gate can weigh it, and size Story X.0 by it.
+**Epic start — `ledger_load` (before sprint planning).** `LEDGER load`. If the file exists but `total=0` while `grep -c "^### DW-"` is 0 and the file is non-empty, it is a legacy-grammar ledger — HALT and run the kit's Step-1 migration. Re-own every `owner:none` entry (`LEDGER slice none`; `append DW-n "owner=<story key in this epic|burndown> by=load note=…"`). **Repair every `UNKNOWN` owner** (`load` marks them; `LEDGER slice unknown` lists them): take the owner's `<epic>-<story>-` prefix and look it up in `SPRINT_PLAN status` / the tracker — exactly one key with that prefix → `append DW-n "owner=<that key> by=load note=retitle_repair"`; zero or several → HALT and surface (`ledger_owner_repaired repaired=N halted=N`; *Unattended:* at a later epic's start, re-own `owner=burndown note=owner_unresolved` instead — U8). An entry on a key no gate will ever query is the silent failure this check exists for. Log `ledger_load total= open= routed= escalated= decision_pending= terminal= owner_unknown= burndown=<owner:burndown count>`; put the same line into the headless sprint-planning argument (`Ledger load: …`) so the readiness gate can weigh it, and size Story X.0 by it.
 
 **Harvest — at `dev_complete`, born owned.** For each item in the spec's frontmatter `deferred:` list: `LEDGER slice all` + grep the summaries for the same root cause → `append DW-n "occurrence=<key>"`; otherwise `LEDGER new "<summary>" "<spec path>" <severity from the item, else med> <fix-risk assessed by the lead> <footprint> "<evidence, one line>" <status> <owner> harvest "<note>"` — in-story → `open owner=<this key>`; in-epic → `routed owner=<the story key that will touch it>`; out-of-footprint → `routed owner=burndown`. `dev_complete` records `deferred=<count harvested>`. **Every `routed owner=<story key>` written here, at `cr_complete`, or at adjudication also becomes a `- DW-n: <summary> (ledger; routed by <gate> <date>)` bullet under that story's acceptance criteria in `epics.md`** — the lead/runner owns its own epic's blocks (Rule 11), so this is immediate, in the same bookkeeping commit; a key in another epic is written by the sequential lead now or by the orchestrator post-merge. At most `routed_story_max` bullets per story (default 6; `routed_max:` in `_bmad/custom/ledger.yaml`) — the excess stays ledger-only and is counted. Log `ledger_routed_planned story=<key> entries=N excess=N by=<gate>`; the `epics.md` edit makes the planning artifacts newer than the epic context, so the pre-warm re-runs before the next plan spawn (Rule 17 (1b)).
 
@@ -1394,7 +2038,7 @@ The deferred-work ledger has as many drains as it has inflows, and every drain i
 4. Every entry still non-terminal after that — the **overflow**, counted `overflow=N` — gets `append DW-n "owner=<specific story key in the next epic> by=burndown note=<why it waits>"` **and a `DW-n:` acceptance bullet in that story's block** (Rule 17 (1b): the sequential lead writes it now; a runner leaves it to the orchestrator's post-merge step, which reads the ledger — no contract line needed). `burndown` owns no work after this gate and `owner=none` never is. If no next-epic story can own it, it is `wontfix-accepted` with a probe, or `decision-pending owner=burndown note=to_x0:<what to decide>` for the decision sheet — the one `burndown` owner allowed after this gate, because it is a question deferred to the next epic's X.0, not work. (The next X.0's key does not exist until that epic's step 6a inserts it, and `ledger.sh` refuses an owner the tracker does not know.) The next epic's X.0 is a mandatory fix-or-close pass over the overflow (see "Retrospective Review & Story X.0").
 5. Log `ledger_burndown_complete open_before=N resolved=N terminal=N chartered=N chartered_size=N overflow=N reowned=N to_decision_sheet=N open_after=N cap=N story_max=N filed_this_epic=N closed_this_epic=N drain_ratio=X.XX`, where `filed_this_epic` = `total` now − `total` at this epic's `ledger_load`, `closed_this_epic` = `terminal` now − `terminal` then, and `drain_ratio` = closed / filed (1.00 = the epic closed as much as it filed). Resume refuses `epic_status_done` without a `ledger_burndown_*` entry for the epic.
 
-**Epic-close decision sheet — `decision_sheet_recorded` (at SC-4, before the merge question; Rule 17 (5)).** The one place a human sees the ledger, at a gate the human already attends. Build it from `LEDGER slice all` filtered to `escalated` and `decision-pending` (any owner), plus — orchestrator mode — the runner's `decisions_for_user:` contract lines. Present every entry in one sitting with its evidence digest (`LEDGER show DW-n`, never the file) and a **recommended disposition**, then write the human's answer as exactly one trailer line `by=merge_gate`:
+**Epic-close decision sheet — `decision_sheet_recorded` (at SC-4, before the merge question; Rule 17 (5)).** (*Unattended:* classified; owner-only entries go to the inbox — doctrine U9.) The one place a human sees the ledger, at a gate the human already attends. Build it from `LEDGER slice all` filtered to `escalated` and `decision-pending` (any owner), plus — orchestrator mode — the runner's `decisions_for_user:` contract lines. Present every entry in one sitting with its evidence digest (`LEDGER show DW-n`, never the file) and a **recommended disposition**, then write the human's answer as exactly one trailer line `by=merge_gate`:
 
 | The user says | Trailer line |
 | --- | --- |
@@ -1408,7 +2052,7 @@ A decision with architectural weight (Rule 20) is also written into the spine in
 
 **Retrospective input.** Pass `Ledger: open_before=… open_after=… chartered=… overflow=… drain_ratio=… decisions=…` in the `/bmad-retrospective` argument so the human-in-the-middle sees the drain, not just the inflow.
 
-**Final epic of the range.** After its burn-down gate, `LEDGER slice all` is the range's residue: every entry must be terminal or owned by a named story key outside the range — surface the list at the SC-4 merge gate as the ledger sweep (it is the decision sheet plus the overflow). A `note=to_x0` deferral cannot outlive the final epic: the decision sheet decides it or moves it to `action_items`.
+**Final epic of the range.** (*Unattended:* classified like the decision sheet — U9.) After its burn-down gate, `LEDGER slice all` is the range's residue: every entry must be terminal or owned by a named story key outside the range — surface the list at the SC-4 merge gate as the ledger sweep (it is the decision sheet plus the overflow). A `note=to_x0` deferral cannot outlive the final epic: the decision sheet decides it or moves it to `action_items`.
 
 ### Epic Context Pre-warm (per epic, lead-driven)
 
@@ -1416,7 +2060,7 @@ A decision with architectural weight (Rule 20) is also written into the spine in
 
 1. Render the skill once: `uv run --no-cache _bmad/scripts/render_skill.py --project-root <abs-root> --skill <abs-root>/.claude/skills/bmad-build-auto`. It prints `read and follow <snapshot-dir>/workflow.md`; take `<snapshot-dir>`.
 2. Spawn a synchronous Opus subagent (`general-purpose`, `model: opus`, `run_in_background: false` — Rule 18 (5)) whose prompt is: "Read fully and follow `<snapshot-dir>/compile-epic-context.md` for epic `<N>`. Working directory `<abs-root>` (Rule 13). Write only `<implementation_artifacts>/epic-<N>-context.md`."
-3. Verify the file exists, is non-empty, and starts with `# Epic <N> Context:`; otherwise halt (`context compilation verification failed` — usually a missing or unparseable `epics.md`).
+3. Verify the file exists, is non-empty, and starts with `# Epic <N> Context:`; otherwise halt (`context compilation verification failed` — usually a missing or unparseable `epics.md`; *Unattended:* retry once, then stop the epic — U5).
 4. Bookkeeping commit; log `epic_context_compiled`.
 
 Run it after sprint planning and the Story X.0 gate (both may edit planning artifacts) and again before any plan spawn whenever a file under `planning_artifacts` is newer than the cache (Rule 5 amendments, X.0 insertion, user edits). With a valid, committed cache the plan spawn reuses it and never recompiles.
@@ -1429,7 +2073,7 @@ After sprint planning, before building the story list, review the previous epic'
 2. Search for `_bmad-output/implementation-artifacts/epic-{N-1}-retro-*.md`. If multiple, latest by mtime; tie-break by lexicographic filename. Log which file was selected.
 3. If a retrospective exists, extract: action items (status: completed / in-progress / not addressed), deferred review findings, preparation tasks for current epic.
 4. Also take the ledger's non-terminal slice (`LEDGER slice all`, plus `LEDGER show DW-n` for any entry whose summary is not enough — never the whole file), and the `action_items:` block of `sprint-status.yaml` (`SPRINT_PLAN status` → `open_action_items`; v6.11 retrospectives append their action items there with `status: open`).
-5. **Close every ledger item — this is a CLOSE, not a relabelling (Rule 17).** The input is every non-terminal entry owned by `burndown` (including the decision sheet's `note=to_x0` deferrals), by `none`, or by a story key of an earlier epic; an entry already routed to a story of this or a later epic is planned work and stays where it is. Each such entry gets exactly one trailer line, `by=x0`: **resolve** (`status=resolved-by:<story> note=<evidence>` — it was fixed since it was filed); **own** (`owner=<N>-0-… ` for items Story X.0 will do, or `owner=<a specific story key of THIS epic whose gate genuinely fails while the item stands>`); or **terminal** (`by-design` / `wontfix-theoretical` / `wontfix-accepted note=reopen_if=…` / `dropped`). Undecided `decision-pending` items (normally only those the previous epic's decision sheet deferred here as `owner=burndown note=to_x0:…`) are batched to the user in one sitting and leave this step decided; human-owned items live in `action_items`, not the ledger. There is no "defer with rationale" and nothing may stay `owner=burndown` or `owner=none`. Default-INCLUDE in X.0 every entry that is (a) trivial + low fix-risk by now, or (b) has two or more `occurrence=` lines — excluding one requires written justification in its note (the burden flips to exclusion). Open action items are included unless the user explicitly defers them. If the previous epic's burn-down gate left more than `ledger_cap` entries owned by this epic's keys, X.0 is a mandatory fix-or-close pass over all of them. The X.0 key enters the tracker only at step 6a, and `ledger.sh` refuses an owner the tracker does not know: write every other disposition here, and the `owner=<N>-0-…` trailers right after 6a's `SPRINT_PLAN generate`.
+5. **Close every ledger item — this is a CLOSE, not a relabelling (Rule 17).** The input is every non-terminal entry owned by `burndown` (including the decision sheet's `note=to_x0` deferrals), by `none`, or by a story key of an earlier epic; an entry already routed to a story of this or a later epic is planned work and stays where it is. Each such entry gets exactly one trailer line, `by=x0`: **resolve** (`status=resolved-by:<story> note=<evidence>` — it was fixed since it was filed); **own** (`owner=<N>-0-… ` for items Story X.0 will do, or `owner=<a specific story key of THIS epic whose gate genuinely fails while the item stands>`); or **terminal** (`by-design` / `wontfix-theoretical` / `wontfix-accepted note=reopen_if=…` / `dropped`). Undecided `decision-pending` items (normally only those the previous epic's decision sheet deferred here as `owner=burndown note=to_x0:…`) are batched to the user in one sitting and leave this step decided (*Unattended:* classified instead; owner-only entries wait with `note=inbox=` — U8); human-owned items live in `action_items`, not the ledger. There is no "defer with rationale" and nothing may stay `owner=burndown` or `owner=none`. Default-INCLUDE in X.0 every entry that is (a) trivial + low fix-risk by now, or (b) has two or more `occurrence=` lines — excluding one requires written justification in its note (the burden flips to exclusion). Open action items are included unless the user explicitly defers them. If the previous epic's burn-down gate left more than `ledger_cap` entries owned by this epic's keys, X.0 is a mandatory fix-or-close pass over all of them. The X.0 key enters the tracker only at step 6a, and `ledger.sh` refuses an owner the tracker does not know: write every other disposition here, and the `owner=<N>-0-…` trailers right after 6a's `SPRINT_PLAN generate`.
 6. Create Story X.0 in four steps (the tracker script rejects `--set` for any key not derived from the epic files, so the story must exist in `epics.md` first):
    - **6a:** Insert `### Story {N}.0: Epic {N-1} Deferred Cleanup` as the first story under Epic {N} in `epics.md`, in the same heading/format as the sibling stories, with a one-paragraph description and the included items as acceptance bullets (one per triaged item, naming its source). Re-run `SPRINT_PLAN generate` (no `--set`) so the key `{N}-0-epic-{N-1}-deferred-cleanup` appears as `backlog`; confirm it in `new_entries`.
    - **6b:** Re-run the epic-context pre-warm (the `epics.md` edit made the planning artifacts newer than `epic-{N}-context.md`); bookkeeping commit (epics.md + tracker + context + log).
@@ -1553,11 +2197,11 @@ Push frequency: per story, to the epic branch's remote.
 
 #### Rule SC-4 — End-of-epic merge gate (user decision point)
 
-After the retrospective gate (whether opted in or not), the lead pauses:
+After the retrospective gate (whether opted in or not), the lead pauses (*Unattended:* no question — `when_green`, doctrine U9):
 
 > "Epic {N} is complete. Merge `{TICKET}-epic{N}` into the feature branch and delete the epic branch (local + remote) in every affected repo?"
 
-**Precondition — the branch head's CI is green.** `gh run list --branch {TICKET}-epic{N} --commit $(git rev-parse HEAD) --json databaseId,status,conclusion -L 1` (or the equivalent for the project's CI): `success` (or `ci=none` for a project without CI) is required; `failure` → log `merge_gate_blocked reason=ci_red run=<id> job=<name>` and surface the failing job instead of the merge question — the branch is not mergeable while it is red, whatever the local suite says (field report 2026-08-30: a branch red for ~16 h passed two full story pipelines); `pending` → wait; `unavailable` → say so and ask the user to confirm CI by hand. Log `ci_green_verified run=<id> head=<sha>` on success.
+**Precondition — the branch head's CI is green.** `gh run list --branch {TICKET}-epic{N} --commit $(git rev-parse HEAD) --json databaseId,status,conclusion -L 1` (or the equivalent for the project's CI): `success` (or `ci=none` for a project without CI) is required; `failure` → log `merge_gate_blocked reason=ci_red run=<id> job=<name>` and surface the failing job instead of the merge question — the branch is not mergeable while it is red, whatever the local suite says (field report 2026-08-30: a branch red for ~16 h passed two full story pipelines); `pending` → wait; `unavailable` → say so and ask the user to confirm CI by hand (*Unattended:* as chosen at launch — U2). Log `ci_green_verified run=<id> head=<sha>` on success.
 
 Before asking, (1) surface the burn-down gate's result for this epic (`ledger_burndown_*` entry: what was resolved, made terminal, chartered into the burn-down story, the overflow re-owned to which next-epic keys, and the drain ratio), and (2) run the **epic-close decision sheet** (see "Ledger Drain"): every `escalated` and `decision-pending` entry, presented once with a recommended disposition, the user's answers written as `by=merge_gate` trailer lines and logged `decision_sheet_recorded` — the burn-down gate set these aside precisely because only the user can decide them. If this is the range's FINAL epic, follow the merge with the ledger sweep: `LEDGER slice all` — every remaining non-terminal entry must already be owned by a named story key outside the range; present the list with a recommended disposition for each — the end-of-project triage, sized for one sitting.
 
@@ -1595,7 +2239,7 @@ Pairs naturally with remote branch protection on trunks.
 
 #### Rule SC-7 — If unsure where to commit, STOP and ask
 
-Branching state can drift across sessions. If the lead cannot confidently identify the right branch to commit to — multiple feature branches with similar names, missing epic branch mid-resume, ambiguous parent between `develop` and `main`, etc. — STOP and ask the user. Do not guess.
+Branching state can drift across sessions. If the lead cannot confidently identify the right branch to commit to — multiple feature branches with similar names, missing epic branch mid-resume, ambiguous parent between `develop` and `main`, etc. — STOP and ask the user. Do not guess. (*Unattended:* stop the run — U5.)
 
 #### Rule SC-8 — Parallel epics on the same feature branch
 
@@ -1617,7 +2261,7 @@ A single working directory running two agents on different epic branches is not 
 - **Coordinated:** each SC-4 sequence starts with `git pull origin <feature>`. If Epic A already merged, Epic B's pull picks that up before its own merge runs. Standard three-way merge from there.
 - **Near-simultaneous:** the user picks the order. The second agent re-pulls feature after the first lands.
 
-**Conflict handling at merge time.** If `git merge --no-ff {TICKET}-epic{N}` produces conflicts (against another epic's already-merged work, a hotfix on feature, or any other drift since branching), the lead STOPs and surfaces to the user. Auto-resolution is forbidden — git's conflict heuristics can silently drop intentional changes. The user resolves in the working tree, then signals the lead to continue.
+**Conflict handling at merge time.** (*Unattended:* integrate forward first and resolve per the policy's `gates.merge_conflicts` — doctrine U9.) If `git merge --no-ff {TICKET}-epic{N}` produces conflicts (against another epic's already-merged work, a hotfix on feature, or any other drift since branching), the lead STOPs and surfaces to the user. Auto-resolution is forbidden — git's conflict heuristics can silently drop intentional changes. The user resolves in the working tree, then signals the lead to continue.
 
 Submodules are independent under this rule too — each submodule's `{TICKET}-epic{N}` merges into its own feature branch sequentially; submodule conflicts require user resolution before the parent's submodule pointer is bumped.
 
@@ -1656,6 +2300,8 @@ Detection runs per affected repo. Different repos may legitimately be in differe
 
 #### Resume-point computation (within-epic)
 
+An attended run whose log holds `story_set_aside` or `story_parked` entries without a later `story_unparked` or `story_dropped`, or whose unattended run state holds patches (`<state>/patches/`), reads the doctrine's U4, U10 and U11 first — never re-implement a set-aside story over its patch, never skip a held story's saved work. *Unattended:* the doctrine's U11 resume semantics override this subsection and the integrity checks' "surface to user": parked and set-aside stories are skipped, an open clarification is ruled, a dead stage's tree is saved as evidence and the story re-run from its logged `rerun_from`, an integrity error stops the epic.
+
 For a repo in RESUME mode:
 
 1. Bucket cycle-log entries by story ID; highest-stage entry per story is its resume anchor.
@@ -1689,7 +2335,7 @@ If Epic A is being resumed and Epic B merged to feature in the interim, Epic A's
 - Log shows `epic_status_done` but no `epic_retro_*` entry → run the model-tier checkpoint first if no `model_tier_checkpoint` entry exists for this epic (every project; the evaluation is idempotent — re-running it is harmless); then resume at the retrospective question.
 - `epic_merge_started` but no `epic_merged_to_feature` → the merge was interrupted. If the logged `head` is an ancestor of `origin/<feature>`, the merge landed: finish only what is missing (the branch deletes, the record commit) and write the entry — never merge again. Otherwise, if the epic branch still exists, resume at the merge question; if neither, INTEGRITY_ERROR.
 - `epic_retro_*` present but no `epic_merged_to_feature` / `epic_merge_skipped` → resume at SC-4: the decision sheet first if no `decision_sheet_*` entry exists for this epic (Rule 17 (5) — its trailer lines are idempotent to re-present; entries already `by=merge_gate` are shown as decided), then the merge question.
-- Both gates are user decision points; re-asking after a long pause is correct behavior. A run interrupted mid-retrospective resumes by re-asking the retrospective question (the skill's own output artifacts show how far it got); never auto-complete a half-finished retro.
+- Both gates are user decision points; re-asking after a long pause is correct behavior. (*Unattended:* neither asks — U9.) A run interrupted mid-retrospective resumes by re-asking the retrospective question (the skill's own output artifacts show how far it got); never auto-complete a half-finished retro.
 
 #### Resume across Sprint Planning
 
@@ -1720,7 +2366,7 @@ Before processing any stories for an epic:
 
 1. Execute `/bmad-sprint-planning` directly via the `Skill` tool, **headless** — the skill defines no flag for this; pass the words `headless, intent sprint-planning` as its argument (its `## Headless Mode` section keys off being "invoked headless"). In v6.11 the skill opens with the implementation-readiness gate (it absorbed `bmad-check-implementation-readiness`), then hands the mechanical work to `sprint_plan.py generate`.
 2. Parse the JSON block it ends with: `{status, intent, gate, status_file, findings, warnings}`.
-   - `gate: FAIL` or `status: blocked` (duplicate epic versions, unreconciled orphans, an unconfirmed fix) → STOP; surface `findings` and the saved `implementation-readiness.md` if written. The user resolves interactively.
+   - `gate: FAIL` or `status: blocked` (duplicate epic versions, unreconciled orphans, an unconfirmed fix) → STOP; surface `findings` and the saved `implementation-readiness.md` if written. The user resolves interactively. (*Unattended:* at launch this is resolved with the owner; at a later epic's start, FAIL stops that epic — U8.)
    - `gate: CONCERNS` → surface the findings once, log them, continue.
    - `gate: PASS` → continue.
 3. `sprint-status.yaml` is now current, all stories tracked, status mismatches caught; run `SPRINT_PLAN validate` as a belt-and-braces check.
@@ -1729,6 +2375,8 @@ Before processing any stories for an epic:
 Re-runs are idempotent — the script's merge is preserve-never-downgrade.
 
 ### Retrospective Per Epic (User Decision Point — the human-in-the-middle exception)
+
+*Unattended:* the retrospective runs headless (`/bmad-retrospective -H <epic>`) and its verdict is read from its document — doctrine U9. This section's "never pass `-H`" governs attended runs.
 
 The retrospective is the ONE deliberate human-in-the-middle exception to the autonomous loop. Its value is the human's judgment about what just happened — automating it defeats its purpose. Concretely: never spawn it as a subagent, never pre-answer its party-mode elicitation or WAIT points (Rule 9's pre-answer protocol explicitly exempts it), and never pass its `-H` / `--headless` flag.
 
@@ -1747,7 +2395,7 @@ Story creation is the Opus **plan** spawn of `bmad-build-auto` (`<story-key> Hal
 
 **Integration AC validation.** Read the spec's Tasks & Acceptance, I/O & Edge-Case Matrix, and Design Notes: does this story introduce a service, module, or component that later stories will consume? Indicators: a new file under `services/` or `lib/`; a new exported class/factory/module; a `Consumed-by:` list; an AC describing a public surface other stories will call.
 
-If yes — the story is service-introducing — it MUST EITHER (a) contain at least one Integration AC of the form "consumer X reads from this service and produces observable effect Y," OR (b) carry an explicit note under `## Design Notes` stating "No consumers in this story; the first consumer will be Story X.Y." (the Rule 1 escape clause for services with no consumers yet in the epic). If neither is present, pause for the user:
+If yes — the story is service-introducing — it MUST EITHER (a) contain at least one Integration AC of the form "consumer X reads from this service and produces observable effect Y," OR (b) carry an explicit note under `## Design Notes` stating "No consumers in this story; the first consumer will be Story X.Y." (the Rule 1 escape clause for services with no consumers yet in the epic). If neither is present, pause for the user (*Unattended:* option (a) once, then (b) only with a named consumer, else stop the story — U5; never (c)):
 
 > "Story <id> introduces <service-name>. No Integration AC and no 'no consumers yet' declaration found. Choose: (a) re-plan — the lead adds the Integration-AC requirement inside the spec's `<intent-contract>` block, sets frontmatter `status: draft`, commits, and re-spawns the plan stage on the spec path with `Halt after planning.` (re-dispatch protocol — re-spawn on the spec path: a story-key re-spawn resumes a `draft` spec in place but creates `spec-<key>-2.md` at any other status); (b) name the future consumer story and add the 'No consumers in this story; the first consumer will be Story X.Y.' note to Design Notes (lead edit; commit); (c) proceed without (producer-consumer wire-up defects can ship green)."
 
@@ -1757,7 +2405,7 @@ If yes — the story is service-introducing — it MUST EITHER (a) contain at le
 
 **Decision dependency.** `LEDGER slice all | grep decision-pending`: if the spec's Design Notes, Tasks, or I/O matrix cite one of those entries, or build on a value the ledger records as undecided (a rate, a threshold, a ratification), the story is about to be built on a question nobody has answered — an `intent gap` for the user NOW, not at the merge gate (field case 2026-08-29: a tick-rate ratification sat `decision-pending` for seven stories). Surface it with `LEDGER show DW-n`, record the answer as a trailer line (`by=spec_gate`) and in the spec's `## Spec Change Log`, and log `decision_dependency=<DW-n csv>` on `spec_validated`.
 
-**Shared-runtime mutation.** Does any AC, I/O row, or `## Verification` command mutate system-level state on a runtime other stories or the lead also use — databases, namespaces, security objects, scheduled tasks, web applications, OS services, a shared dev server? If yes, the spec's `## Verification` must name a **throwaway environment** (a fresh container, a scratch namespace or database, a disposable instance) for its destructive checks, and every test-running party for this story (build-auto's handoff, QA, the review layers, the lead's smoke) runs stateful classes one at a time (Rule 18 (3)). A spec that names none: the lead adds the environment (lead edit, non-frozen section) or raises an `intent gap` if the project has nowhere disposable to run it. Log `mutates_shared_runtime=true|false` on `spec_validated`. (Field report 2026-09-11: an installer story verified against the one long-lived instance; a rework's concurrent test runs left it with a database mounted over a deleted directory and the story blocked on a human restart.)
+**Shared-runtime mutation.** Does any AC, I/O row, or `## Verification` command mutate system-level state on a runtime other stories or the lead also use — databases, namespaces, security objects, scheduled tasks, web applications, OS services, a shared dev server? If yes, the spec's `## Verification` must name a **throwaway environment** (a fresh container, a scratch namespace or database, a disposable instance) for its destructive checks, and every test-running party for this story (build-auto's handoff, QA, the review layers, the lead's smoke) runs stateful classes one at a time (Rule 18 (3)). A spec that names none: the lead adds the environment (lead edit, non-frozen section) or raises an `intent gap` if the project has nowhere disposable to run it (*Unattended:* stop the story — U5). Log `mutates_shared_runtime=true|false` on `spec_validated`. (Field report 2026-09-11: an installer story verified against the one long-lived instance; a rework's concurrent test runs left it with a database mounted over a deleted directory and the story blocked on a human restart.)
 
 **Ledger inbox (Rule 17 (1b)).** `LEDGER slice <key>` again: every entry the story owns must be either cited in Tasks & Acceptance / the I/O matrix or listed as `Declined DW-n: <reason>` under Design Notes. An entry the plan ignored → the lead adds it as a Tasks & Acceptance item (lead edit, non-frozen section) or, if the plan's intent genuinely excludes it, re-owns or closes it now (`by=spec_gate` — the lead has the authority and the vocabulary here; adjudication after `done` does not). A declined entry is dispositioned the same way in the same commit. Log `owned_ledger=<DW-n csv|none> addressed=N declined=N` on `spec_validated`.
 
@@ -1802,7 +2450,7 @@ This gate exists because MCP tool inventories may not propagate reliably to spaw
 2. For each AC, consult the spine's ADs (Design Notes ids first, then any AD whose `Binds:` covers the area). If an AD's Rule commits to a specific tool stack for that AC, it's "AD-tooled."
 3. Drive each AD-tooled AC verification using the relevant MCP / tool; record pass/fail + evidence paths. **Rule 19 applies to this gate most of all** — it is lead-executed and therefore trusted: for each AD-tooled AC name the mutation that would flip the result, apply it, observe the failure, revert, and confirm the tree is byte-identical (`git status --short` / `git diff --stat`). A `pass` with no named mutation is recorded `result=unverified`, not `pass` (field case: `pass_commands_empty` recorded against a value typed `readonly never[]`).
 4. Append one cycle-log entry per story: `<UTC> TAB Story <id> TAB adr_verifications_complete TAB <metadata>` — including `mutations=<ac:what,…|none>`.
-5. On failure, surface to user before spawning QA.
+5. On failure, surface to user before spawning QA (*Unattended:* the rework path — U5).
 6. Pass results to code reviewer's spawn-prompt context.
 7. If no AD-tooled ACs, emit `adr_verifications_complete result=none_required` and proceed. (The stage name keeps its historical `adr_` spelling — see Rule 6.)
 
@@ -1813,6 +2461,8 @@ The lead resolves the spine once per epic (`spine_resolved`) and includes its pa
 **Layer 3 — decisions flow back (Rule 20).** Clarification answers, Rule 5 amendments, and decision-sheet calls with architectural weight are written into the spine by the lead (light path: new/amended AD, Conventions or Stack row, `memlog.py append`, `lint_spine.py`, commit; a conflict with an existing AD → `bmad-architecture` Update intent, interactive). The pre-warm then recompiles the epic context, so the decision reaches the next plan spawn. Logged `spine_updated`.
 
 ## When to Pause
+
+*Unattended:* stages still halt with `## Clarification Needed` for anything outside the Unattended block's decide-small rule (U6); the lead classifies instead of pausing (U5).
 
 Within each agent, halt and surface a clarification via `## Clarification Needed` if ANY hold:
 
@@ -1825,6 +2475,8 @@ Within each agent, halt and surface a clarification via `## Clarification Needed
 Do not guess; do not soldier on. A short pause beats a wrong implementation unwound later.
 
 ## Handling Clarifications
+
+*Unattended:* classify, then rule or park — doctrine U5.
 
 When an agent returns with `## Clarification Needed`:
 
@@ -1874,7 +2526,7 @@ Per-stage log entries, append-only. File: `_bmad-output/implementation-artifacts
 
 **Valid story-level stages, in order:** `stage_spawned` (write-ahead marker IMMEDIATELY before every stage `Agent` call — see below), `story_created` (plan spawn returned `ready-for-dev`), `spec_validated` (lead gate passed; `ready-for-dev` written), `dev_complete` (implement spawn returned `done`; `review` written), `adr_verifications_complete` (mandatory, between dev and qa; emits `result=none_required` if no AD-tooled ACs), `qa_complete`, `cr_complete`, `ledger_adjudicated` (mandatory, after the last cr and before smoke — Rule 17), `smoke_complete` (mandatory, between adjudication and commit), `fresh_check` (mandatory, after smoke — Rule 19; metadata `env=<recipe|clean-checkout> tests=<n> result=<pass|fail> order=forward,reverse`), `committed`, `story_cycle` (mandatory, right after `committed` — one line the telemetry reads instead of re-deriving it: `plan_to_commit_min=<n> implement_passes=<n> reviews=<n> rework=<n> first_ci=<success|story|flake|infra|pending|none> models=plan:<m>,implement:<m>,qa:<m>,cr:<m>`; `first_ci` is back-filled by a later `ci_resolved story=<id>` entry, never by editing this line). Also story-level, whenever they occur: `stage_api_error` (a stage `Agent` call ended on a harness error — metadata `stage= error=<rate_limit|overload|usage_limit|other> wait_min=<n>`; closed by the re-spawn's normal entry) and `ci_red_classified` (metadata `run=<id> class=<story|flake|infra> test=<name|none>`). Clarification events use `<stage>_clarification_requested` (`<stage>` ∈ `plan | dev | qa | cr`), closed by that stage's normal success entry on the re-spawn — `story_created` for `plan`, `dev_complete`, `qa_complete`, `cr_complete` — never by a literal `<stage>_complete` (there is no `plan_complete`). Optional: `bookkeeping_committed sha=<short>` after each Rule 16 commit (aids resume forensics; not required). Rework-loop entries (story-level, between `cr_complete` and the next `stage_spawned`): `rework_opened` — the lead re-opened the spec; metadata `cycle_iteration=N iteration=<k> trigger=<high|med_first_review|fix_pack|smoke|ci|cap_override> items=<csv of finding / DW ids> scope_baseline=<sha>`. `rework_cap_reached` — the third iteration did not converge; metadata `cycle_iteration=N rework_iterations_used=3 cap=3 outstanding=<csv> result=stop_and_surface`. `rework_cap_override` — the user authorized one more iteration; metadata `cap=3 used=3 authorized_by=user items=<finite csv> close=next_review_without_high` — an override without `items=` is not writable: ask for the list first (Rework Loop step 5).
 
-**`stage_spawned` — the in-flight marker.** Written IMMEDIATELY BEFORE the `Agent` call for any pipeline stage, never after. Metadata: `stage=<plan|implement|qa|code-review> spawn_at=<UTC> model=<id> agent_name=<name passed on the Agent call> cycle_iteration=N`. Closed by that stage's success entry (`story_created` / `dev_complete` / `qa_complete` / `cr_complete`) or by a `<stage>_clarification_requested`; the success entry's `spawn_at=` repeats the marker's value. A `stage_spawned` with no closing entry is the ONLY durable evidence that a stage may still be in flight — resume MUST check for it before any re-dispatch, and (orchestrator mode) it names the runner-owned agent to ask about. The durable record is otherwise empty for exactly the window in which liveness matters; this entry fills it.
+**`stage_spawned` — the in-flight marker.** Written IMMEDIATELY BEFORE the `Agent` call for any pipeline stage, never after. Metadata: `stage=<plan|implement|qa|code-review> spawn_at=<UTC> model=<id> agent_name=<name passed on the Agent call> cycle_iteration=N`, plus `story_base=<HEAD sha>` on a story's first implement spawn (and, unattended, its first after a set-aside or a re-plan). Closed by that stage's success entry (`story_created` / `dev_complete` / `qa_complete` / `cr_complete`) or by a `<stage>_clarification_requested`; the success entry's `spawn_at=` repeats the marker's value. A `stage_spawned` with no closing entry is the ONLY durable evidence that a stage may still be in flight — resume MUST check for it before any re-dispatch, and (orchestrator mode) it names the runner-owned agent to ask about. The durable record is otherwise empty for exactly the window in which liveness matters; this entry fills it.
 
 **Valid epic-level stages:**
 
@@ -1910,6 +2562,7 @@ Per-stage log entries, append-only. File: `_bmad-output/implementation-artifacts
 - `epic_merge_skipped` — User declined SC-4 merge. Metadata: `reason=<short>`.
 - `epic_merge_started` — SC-4 write-ahead marker, on the epic branch before the first checkout. Metadata: `head=<epic head sha>` `feature=<branch>`.
 - `epic_merged_to_feature` — SC-4 merge completed (written on the feature branch and committed as `chore(epic-N): record merge`). Metadata: `repos=<paths>` `feature_sha=<sha>` `merge_sha=<sha>` `submodules=<paths-or-empty>`.
+- Unattended runs (doctrine U2–U12): `unattended_started` / `unattended_resumed` (`run= policy= doctrine= range= lock_token=`), `permission_mode_attested`, `ci_mode_chosen`, `notify_unavailable`, `ruling` (`question= choice= rejected= why= category=<decide|veto|park|stop> policy=`, plus `reversal=` for a veto), `story_parked`, `story_set_aside` (`story= patch= sha=`), `story_unparked` (`via= story_base=`), `story_dropped` (`story= id=`), `story_waiting` (`story= on=`), `runner_unattended_start` (`run= policy= doctrine=`), `inbox_hand_edit` (`file=`), `rework_cap_override … authorized_by=owner via=`, `owner_decision` (`id= at=<answer_ref> via= by=`), `unattended_stop` (`unit= reason=`), `hold_ordered`, `hold_saved` (`story= stage= patch= tree=`), `hold_restored` (`story=`), `stage_dead` (`story= stage= evidence= rerun_from=`), `hold_complete` (`shas=`), `unattended_report`.
 - `epic_summary` (optional, once per epic after the last `committed`) — see Workflow Telemetry.
 
 **Standardized telemetry (on every `*_complete` entry):**
@@ -2035,7 +2688,7 @@ Derivable from per-stage entries; a convenience, not a source of truth.
 - **Skipping Source Control gates on a "resume" assumption** — Mid-resume should find the branches in place. If missing, that's a workspace-integrity error per SC-2 — halt; don't silently re-create. Silent recreation orphans prior commits.
 - **Forgetting submodules need their own `{TICKET}-epic{N}`** — SC-2 applies per repo. Each submodule has its own.
 - **Running parallel epics in a single working directory** — Git allows one HEAD per working tree. Parallel agents use `git worktree add` or separate clones (SC-8).
-- **Auto-resolving merge conflicts at SC-4** — Three-way-merge conflicts at end-of-epic must be surfaced to the user. Git's auto-resolution can silently drop intentional changes.
+- **Auto-resolving merge conflicts at SC-4** — Three-way-merge conflicts at end-of-epic must be surfaced to the user. Git's auto-resolution can silently drop intentional changes. (Attended runs. `--unattended` resolves only what its policy allows, as rulings the owner can veto — U9.)
 - **Spawning pipeline sub-agents without passing the resolved model** — Omitting the `model` parameter on the `Agent` call makes every stage inherit the lead's model instead of the pipeline's intent (dev/qa → `sonnet`, code-review → `opus` per the Model Strategy map, unless `_bmad/custom/model-overrides.yaml` or a skill's frontmatter re-pins it). Resolve per Agent Invocation Pattern step 1 and pass it on the spawn. Lead-run gate skills are the exception — they run inline on the lead's model by design.
 - **Letting a skill's interactive checkpoint block the run** — `bmad-code-review` has four happy-path halts (context confirm, decision-needed resolution, patch menu, next-steps menu) plus a large-diff chunking offer; `bmad-qa-generate-e2e-tests` opens by asking what to test. Pre-answer every checkpoint in the spawn prompt (Rule 9); an un-pre-answered checkpoint is a Clarification, never a silent wait. (`bmad-build-auto` has none — its only exits are HALT statuses.)
 - **Expecting `bmad-build-auto` to sync sprint-status.yaml** — It never does (only the interactive `bmad-build` syncs). The lead writes `ready-for-dev` / `in-progress` / `review` through `SPRINT_PLAN generate --set`; `bmad-code-review` writes `done`/`in-progress`; the lead writes `epic-{N}: done`. Any other status write path (hand edits, prose instructions to the stage agent) desyncs tracking (see Status Ownership).
@@ -2052,12 +2705,14 @@ Derivable from per-stage entries; a convenience, not a source of truth.
 - **Batching test-runner calls in one message against a shared runtime** — tool calls in one message run concurrently; stateful test classes race on shared fixtures (an uninstall racing an install left a database mounted with no file behind it). One class or suite per call, wait, never re-submit on a client timeout — propagated to every depth (Rule 18 (3)); destructive verification belongs on a throwaway environment named at spec validation.
 - **Manufacturing next round's findings from this round's fixes** — a rework that changes pinning tests without updating their `mutation:` lines hands the next review a fresh set of Rule 19 findings. Whoever changes a pinning test writes the line in the same pass; a stale line on a test that exists is a LOW the reviewer closes in-pass, never a rework trigger.
 - **Skipping the `deferred:` harvest, or harvesting without an owner** — build-auto's deferred findings live only in spec frontmatter until the lead files them with `LEDGER new … <status> <owner> harvest`; unharvested items are invisible to the drain, and ownerless ones have no gate that will ever close them (Rules 15/17).
-- **Automating the retrospective** — Spawning `/bmad-retrospective` as a subagent, pre-answering its elicitation or WAIT points, or passing its `-H` / `--headless` flag. The retrospective is the one deliberate human-in-the-middle gate in the loop; its output is only as good as the human answers it collects. (Distinct from the start-of-epic retro-REVIEW gate, which is lead-automated triage of the previous retro's written artifacts and needs no human.)
+- **Automating the retrospective** (attended runs — `--unattended` runs it headless by the owner's policy, U9) — Spawning `/bmad-retrospective` as a subagent, pre-answering its elicitation or WAIT points, or passing its `-H` / `--headless` flag. The retrospective is the one deliberate human-in-the-middle gate in the loop; its output is only as good as the human answers it collects. (Distinct from the start-of-epic retro-REVIEW gate, which is lead-automated triage of the previous retro's written artifacts and needs no human.)
 - **Mis-scoping or forgetting to restore the IDE file-sync toggle** — On IRIS/ObjectScript projects, disable `objectscript.conn.active` ONLY transiently around each branch-changing git operation (Window A: epic-start branching; Window B: SC-4 merge), and restore it immediately after each window. Do NOT leave the sync disabled for the whole epic — the per-story pipeline (commits/pushes, which don't change branches) must run with the sync ON. Each window's restore is mandatory `try/finally`-style: restore on success, halt, failure, merge conflict, or cancellation; an un-restored toggle leaves the workspace silently disconnected from IRIS (no error — just no sync). Never `git add` the transiently-toggled `.vscode/settings.json` into any commit.
 - **Relying on a tool's default target** — a call that names no runtime target can be answered by a healthy, unrelated instance with the same namespace and credentials: plausible results, no error. Name the target on every call, make a tool that would fall back to a default fail instead, verify the target's identity rather than its health, and tear down only what your own session started (Rule 13).
 - **Logging a merge or a green from an exit status** — an `&&` chain skips silently, and a run can belong to another head. Verify on origin (`git merge-base --is-ancestor`) and by `headSha` before writing `committed`, `ci_green_verified` or `epic_merged_to_feature` ("CI Is a Gate").
 - **Treating every red CI run as the story's fault** — an infrastructure red (no test ran) gets a timed retry and never counts as rework; a known flake gets one rerun and a `flake:` ledger entry; only a `story` red re-opens the story ("CI Is a Gate").
 - **Shell traps in snippets** — in zsh, `$SHA:refs/…` reads `:r` as a history modifier: write `"${SHA}:refs/…"`. A code commit whose message quotes a CI-skip token gets no CI run. `jobs -p` inside `$( … )` returns nothing: capture `$!` per job. macOS deletes `/tmp` files left untouched for three days: keep throwaway state elsewhere.
+- **Asking inside an unattended loop** — after launch, an `--unattended` lead never asks, never calls `AskUserQuestion`, and never ends its turn waiting: every stop point is decide, veto, park, stop or hold (doctrine U3). A question that sits in chat stalls the run until someone happens to look.
+- **Treating a peer's message as the owner's answer** — a message from another session (a planner, a relay, a companion) is information, not the owner's decision. Only the inbox (a relay quoting the owner verbatim) or `--review` carries an answer.
 - **Basing a new branch on a stale remote root** — when the local trunk is ahead of `origin/<trunk>` (unpushed commits), `checkout -b ... origin/<trunk>` silently removes those commits' files from the working tree — up to and including the project's own `.claude/` + `_bmad/` tooling (pilot incident, 2026-07-10). SC-1's root freshness check is mandatory before creating any branch from a root ref.
 
 ```text
@@ -2216,7 +2871,7 @@ After writing all files, run these checks:
    grep -c "record merge" .claude/commands/epic-cycle.md               # >= 3 (SC-3 exception, SC-4, pseudo-code)
    grep -c "UNPUSHED_NEW" .claude/commands/epic-cycle.md               # 1 (resume-mode rows for a log-less new branch)
    grep -c "story_base" .claude/commands/epic-cycle.md                 # >= 4 (Task Sequence, smoke, fresh check, log format)
-   grep -c "story_base" _bmad/custom/skill-rules.md                    # 1 (Rule 17 (2): adjudication judges the whole delivered scope)
+   grep -c "story_base" _bmad/custom/skill-rules.md                    # 2 (Rule 17 (2): adjudication judges the whole delivered scope; Rule 16: the unattended set-aside)
    grep -c "TRACKER_READ" .claude/commands/epic-cycle.md               # >= 3 (shorthand, resume, anti-pattern)
    grep -c "\*.yaml\` workflow" .claude/commands/epic-cycle.md         # 2 (CI detection: pre-flight and "CI Is a Gate")
    grep -c "_bmad/bmm/config.yaml" .claude/commands/epic-cycle.md      # >= 1 (path-agreement check)
@@ -2251,22 +2906,22 @@ After writing all files, run these checks:
    ```
    Expected: no output. Any placeholder printed is used by the override but unknown to the installed skill — re-derive that layer from the installed `customize.toml`.
 
-2. **All five customization files exist, and the legacy pair is gone:**
+2. **All the customization files exist, and the legacy pair is gone:**
    ```bash
    ls _bmad/custom/
    ls _bmad/custom/bmad-create-story.toml _bmad/custom/bmad-dev-story.toml 2>/dev/null | wc -l   # 0
    ```
-   Expected: `skill-rules.md`, `bmad-build-auto.toml`, `bmad-build.toml`, `bmad-qa-generate-e2e-tests.toml`, `bmad-code-review.toml` (plus `.bak-*` backups and any `.user.toml`).
+   Expected: `skill-rules.md`, `bmad-build-auto.toml`, `bmad-build.toml`, `bmad-qa-generate-e2e-tests.toml`, `bmad-code-review.toml`, `epic-cycle-unattended.md`, `unattended.yaml` (plus `.bak-*` backups, any `.user.toml`, and the project's own files such as `kit-versions.yaml` or the overlay).
 
 2b. **The ledger tool parses and round-trips** (run against a scratch file, never the project's ledger):
    ```bash
    bash -n _bmad/scripts/ledger.sh
-   T=$(mktemp -t ledger-XXXX.md); rm -f "$T"
+   W="$(mktemp -d)" || exit 1; T="$W/ledger.md"
    bash _bmad/scripts/ledger.sh "$T" new "Self-test entry" "kit-step-4" low low in-story "installer self-test" open 0-0-selftest install "delete me"   # prints DW-1
    bash _bmad/scripts/ledger.sh "$T" append DW-1 "status=dropped by=install note=self-test"
    bash _bmad/scripts/ledger.sh "$T" load     # total=1 open=0 ... terminal=1
    bash _bmad/scripts/ledger.sh "$T" slice all | wc -l   # 0
-   C=$(mktemp -t ledger-ctr-XXXX); echo 7 > "$C"
+   C="$W/ctr"; echo 7 > "$C"
    LEDGER_ID_COUNTER="$C" bash _bmad/scripts/ledger.sh "$T" new "Counter test" "kit-step-4" low low in-story "self-test" open 0-0-selftest install "x"   # prints DW-7 (shared counter wins over local next)
    cat "$C"   # 8
    echo x > "$C"; LEDGER_ID_COUNTER="$C" bash _bmad/scripts/ledger.sh "$T" new "Bad counter" "kit-step-4" low low in-story "self-test" open 0-0-selftest install "x"; echo "exit=$?"   # ERROR … exit=1 (a broken counter is never silently ignored)
@@ -2276,7 +2931,7 @@ After writing all files, run these checks:
    bash _bmad/scripts/ledger.sh "$T" new "Prefix" "kit-step-4" low low in-story "self-test" decision-pending 0-0-selftest install "note=human=x" >/dev/null; grep -c "note=note=" "$T"   # 0 (a caller's note= prefix is stripped)
    rm -f "$T" "$C"
    # owner validation against a scratch tracker (the ledger's sibling sprint-status.yaml)
-   D=$(mktemp -d -t ledger-XXXX); printf 'development_status:\n  1-1-real-story: backlog\n' > "$D/sprint-status.yaml"
+   D="$W/tracker"; mkdir -p "$D"; printf 'development_status:\n  1-1-real-story: backlog\n' > "$D/sprint-status.yaml"
    bash _bmad/scripts/ledger.sh "$D/deferred-work.md" new "Owner test" "kit-step-4" low low in-story "self-test" routed 1-1-real-story install "ok"        # prints DW-1
    bash _bmad/scripts/ledger.sh "$D/deferred-work.md" new "Bad owner" "kit-step-4" low low in-story "self-test" routed 1-1-retitled-story install "x"; echo "exit=$?"   # ERROR … exit=1
    LEDGER_OWNER_CHECK=off bash _bmad/scripts/ledger.sh "$D/deferred-work.md" append DW-1 "owner=1-1-retitled-story by=install note=plant"
@@ -2291,9 +2946,47 @@ After writing all files, run these checks:
    bash _bmad/scripts/ledger.sh "$D/deferred-work.md" slice all | grep -c "DW-9"   # 0 (the latest timestamp wins, not the last line)
    echo 20 > "$D/ctr"; echo "pid=1 acquired_at=then" > "$D/ctr.lock"; touch -t 202001010000 "$D/ctr.lock"
    LEDGER_ID_COUNTER="$D/ctr" bash _bmad/scripts/ledger.sh "$D/deferred-work.md" new "Stale lock" "kit-step-4" low low in-story "self-test" routed 1-1-real-story install "x" 2>/dev/null   # prints DW-20 (a lock a crashed claim left is broken, with a warning)
-   rm -rf "$D"
+   [ -n "$W" ] && [ "$W" != / ] && rm -rf "$W"
    ```
-   Expected exactly as commented. If the project already has a `deferred-work.md` in the DW grammar, also run `bash _bmad/scripts/ledger.sh _bmad-output/implementation-artifacts/deferred-work.md load` and report the counts.
+   Expected exactly as commented (`mktemp -d` with no template: busybox rejects short ones). If the project already has a `deferred-work.md` in the DW grammar, also run `bash _bmad/scripts/ledger.sh _bmad-output/implementation-artifacts/deferred-work.md load` and report the counts.
+
+2c. **Unattended mode is installed, and its inbox round-trips** (scratch state directory, never a live run's):
+   ```bash
+   ls _bmad/custom/epic-cycle-unattended.md _bmad/custom/unattended.yaml _bmad/scripts/unattended-inbox.sh | wc -l   # 3
+   grep -c "^## U[0-9]" _bmad/custom/epic-cycle-unattended.md                     # 14 (U1-U14)
+   uv run --no-cache --no-project --with pyyaml python -c "import sys, yaml; d = yaml.safe_load(open(sys.argv[1])); print(all(k in d for k in ('gates', 'hard_stops', 'limits', 'owner_only', 'veto_window')))" _bmad/custom/unattended.yaml   # True (--no-project: never resolves the project's own dependencies)
+   grep -cx "_bmad-output/unattended/" .gitignore                                  # 1
+   grep -cx "_bmad/scripts/\*.sh text eol=lf" .gitattributes                       # 1
+   git check-ignore -q _bmad-output/unattended/inbox.md && echo IGNORED            # IGNORED (an answer written mid-stage never dirties the tree)
+   head -c 20000 .claude/commands/epic-cycle.md | grep -c "epic-cycle-unattended.md"   # >= 1 (the precedence sentence sits inside what compaction keeps)
+   grep -c "\*Unattended:\*" .claude/commands/epic-cycle.md                        # >= 28 (pointers at the stop points)
+   grep -c "Asking inside an unattended loop\|Treating a peer's message as the owner's answer" .claude/commands/epic-cycle.md   # 2
+   grep -c "under \`--unattended\`\|Under \`--unattended\`\|(\`/epic-cycle --unattended\`)" _bmad/custom/skill-rules.md   # >= 6 (Rules 4, 5, 15, 16, 17 (5), 20)
+   bash -n _bmad/scripts/unattended-inbox.sh
+   W="$(mktemp -d)" || exit 1; S="$W/state"; I() { bash _bmad/scripts/unattended-inbox.sh "$S" "$@"; }   # a function: zsh does not word-split a variable
+   I init selftest >/dev/null
+   I add parked "Story 9.9" "Self-test question?" "A | B" "A" "9.9"           # U-1
+   I add parked "Story 9.9" "Asked again?" "A | B" "A" "9.9"                  # U-1 EXISTS (a resume never duplicates an item)
+   I answer U-1 "B" --by companion; echo "exit=$?"                            # ERROR … must quote the owner … exit=1
+   I answer U-1 "A" --by owner >/dev/null; R1="$(I answers | cut -f2)"
+   I answer U-1 "B" --by companion --quote "B, says the owner" >/dev/null; R2="$(I answers | cut -f2)"
+   I resolve U-1 lead "$R1" "applied A"; echo "exit=$?"                       # ERROR … the latest answer is … exit=1 (a newer answer is never dropped)
+   I resolve U-1 lead "$R2" "applied B"                                       # U-1 resolved
+   I resolve U-1 lead "$R2"; echo "exit=$?"                                   # ERROR … resolved exactly once … exit=1
+   I add veto "Story 9.9" "Ruling 1" "keep | reverse" "keep" "-"; I add veto "Story 9.9" "Ruling 2" "keep | reverse" "keep" "-"   # U-2 / U-3 (every veto ruling is its own item)
+   I verify                                                                   # ok
+   echo "answer: by hand" >> "$S/inbox.md"; I verify; echo "exit=$?"          # MISMATCH … exit=1
+   I render 2>/dev/null; ls "$S" | grep -c "inbox.md.edited-"; I verify     # rendered / 1 / ok (the hand edit is saved aside, never applied)
+   I hold "owner self-test" >/dev/null; I hold "auto: usage self-test"           # HOLD KEPT: owner self-test (an auto hold never replaces the owner's)
+   I hold-clear "relaunch" --usage-only; echo "exit=$?"                          # HOLD KEPT: owner self-test … exit=5 (a relaunch never clears the owner's hold)
+   I hold-clear "self-test" >/dev/null; ls "$S/HOLD" 2>/dev/null | wc -l         # 0 (an interactive resume clears a hold)
+   T1="$(I run-start t1 lead | sed -n 's/.*token=//p')"; I run-start t2 lead >/dev/null; echo "exit=$?"   # exit=3 (one run at a time)
+   T2="$(I run-takeover t1 lead "relaunch" | sed -n 's/.*token=//p')"
+   I run-boundary t1 "$T1" "old session"; echo "exit=$?"                      # ERROR … not this session -- stop … exit=4 (a replaced session learns it at once)
+   I run-end t1 "$T2" "self-test"                                             # run.lock released (self-test)
+   [ -n "$W" ] && [ "$W" != / ] && rm -rf "$W"
+   ```
+   Expected exactly as commented.
 
 3. **No `.toml` carries an `on_complete` hook:**
    ```bash
@@ -2372,6 +3065,7 @@ The workflow is ready to use. Projects can add custom rules to `_bmad/custom/ski
 
 - **Sequential run — safe at a story boundary.** Upgrade after a story's `committed` entry and before the next `stage_spawned` (or at any stage boundary with a clean tree and no spawn in flight — never while a `bmad-build-auto` / QA / code-review agent is running). The install commit lands on the epic branch (a chore commit under SC-3; it reaches the feature branch at the SC-4 merge). On the next `/epic-cycle` invocation resume does the rest: committed stories are skipped; sprint planning re-runs, so `ledger_load` runs; a story at `cr_complete` without `ledger_adjudicated` resumes at adjudication; an epic whose last story is committed but has no `ledger_burndown_*` entry runs the burn-down gate before `epic_status_done`.
 - **Ledger migration is not optional mid-epic.** `ledger_load` halts on a legacy-grammar ledger, so the Step 1 migration must be part of the upgrade commit. Migrated entries are triaged by class at migration (human-owned and product calls → `decision-pending`, story-closable → `routed owner=burndown`, non-two-way-door LOWs → `wontfix-accepted`); this epic's burn-down gate is therefore the first real drain of the story-closable backlog and may charter a burn-down story (bounded by `burndown_story_max`), and this epic's SC-4 decision sheet is the first time the `decision-pending` entries reach the user — budget for both.
+- **Upgrading to ≥ 2026-10-19.1 (`--unattended` and `--review`).** Attended runs are unchanged: the doctrine (`_bmad/custom/epic-cycle-unattended.md`) is read only under the new flags. The install writes `_bmad/custom/unattended.yaml` from its template when absent — **review it with the user before the first unattended run**: `owner_only` (what always waits for them), `veto_window` (what the loop decides and reports), `hard_stops`, `milestones` (which define "the release"), `product_defaults`, `owner_fixed` and `stage_preamble` are the project's to set. `.gitignore` gains `_bmad-output/unattended/`. Never upgrade under a live unattended run (Step 1 check 7): hold it first (`bash _bmad/scripts/unattended-inbox.sh <state> hold "upgrade"`, where `<state>` is `_bmad-output/unattended` or, for a parallel run, `<worktree_base>/.coordination/unattended`), wait until the run logs `hold_complete` and `run-status` prints `none`, upgrade, then re-invoke the same command to resume — the resume clears the hold.
 - **Upgrading to ≥ 2026-10-18.1 (the adversarial review of the kit).** Safe at a story boundary; the orchestrator rule below still applies. (1) `ledger.sh` is replaced: drop any local patch to it — this version validates owners correctly on large trackers and non-ASCII keys, stores backslashes verbatim, reads effective state by timestamp, and breaks a crashed claim's counter lock. (2) An entry an earlier run parked on a not-yet-existing X.0 key (`owner=<N>-0-…` written with `LEDGER_OWNER_CHECK=off`) reads `UNKNOWN` at `ledger_load`: re-own it `owner=burndown note=to_x0:<what to decide>`. (3) The pre-flight now compares the resolver's artifact paths with `_bmad/bmm/config.yaml` and halts on a mismatch — align them before the next run. (4) A user-level v7 preview needs `v7_global_accepted:` in `kit-versions.yaml` (re-run Step 1 to record it), or the pre-flight halts. (5) A project whose CI is not GitHub Actions now reads `ci=unavailable` (the merge gate asks you to confirm CI) instead of `ci=none`. (6) Sequential merges now commit their merge record on the feature branch (`chore(epic-N): record merge`); an epic merged under an earlier version with an uncommitted `epic_merged_to_feature` line should have that line committed on the feature branch now.
 - **Upgrading to ≥ 2026-10-14.1 (BMAD 6.12.2; the v7 gate).** BMAD 6.12.2 is a drop-in: no skill text or `customize.toml` changed, so the derived overrides are identical; its helper scripts now write UTF-8 on Windows, and `install --yes` without `--directory` installs into the current directory — `npx bmad-method@6.12 install --action update --modules bmm --tools claude-code --yes` upgrades a project unattended. Its installer now advertises a BMAD v7 preview (`npx skills add bmad-code-org/BMAD-METHOD`, then `bmad setup`). Do not apply it to a project that runs these kits: v7 replaces the review layers, sprint planning and story files they drive, and from this version Step 1 and the command's pre-flight refuse it (BMAD-V7 / V7-GLOBAL). `ledger.sh` now refuses a status outside the Rule 15 grammar (`LEDGER_STATUS_CHECK=off` for a migration), reads a trailer's fields only up to its `note=`, and strips a caller's `note=` prefix; run `LEDGER load` after the upgrade — `status_unknown=` above 0 names entries an earlier typo hid from the status-based gates, and a project that patched these into its own copy can drop the patch. Parallel runs: `parallel.yaml` gains an optional `integrate_conflicts` (absent = `ask`, today's behaviour); a project whose own rule lets runners resolve plain-intent conflicts during integrate-forward sets `resolve-plain` and retires that override. Nothing else to migrate.
 - **Upgrading to ≥ 2026-10-10.1 (field report 2026-10-10; BMAD 6.12.1).** Safe at a story boundary. (1) Move every hand addition to the command or the overrides into `_bmad/custom/epic-cycle-overlay.md` before re-running the kit (Step 3c) — from now on they survive each upgrade. (2) The overrides are re-derived from the installed 6.12 `customize.toml` (`{diff_file}`, `{claims_file}`, the softened finding floor, the hermeticity brief); on BMAD 6.12.1, re-run BMAD's own installer first. (3) CI resolution point (1) moves to the next story's implement spawn; an in-flight epic picks it up at its next story. (4) New story-level entries `fresh_check` and `story_cycle`: a story committed before the upgrade is complete without them. Record the project's fresh-environment recipe under Project-specific rules if it has one; otherwise the check runs on a clean checkout. (5) Specs planned before the upgrade carry no `(loop)` / `(once)` marks and run their `## Verification` as before. (6) A project that wrote its own rules for what this version adds — read once, runtime targets, CI at the implement spawn, targeted tests, fresh-environment either-order checks, extend-don't-copy, prose discipline — retires the duplicates or keeps them under Project-specific rules where they say more. Nothing to migrate in the ledger: `LEDGER_ID_COUNTER` is used only when a parallel run sets it.
@@ -2390,7 +3084,7 @@ The workflow is ready to use. Projects can add custom rules to `_bmad/custom/ski
 
 Record the install: create/update `_bmad/custom/kit-versions.yaml` with `epic-cycle-base: <this document's Kit-Version>` (companions record their own keys: `skill-optimization`, `parallel-epic-cycle`). The parallel kit's upgrade check reads this registry.
 
-**Commit the OUTPUT, completely.** Stage the output set by path and commit it with a message naming the kit version applied — the output set is the installed files (`.claude/commands/epic-cycle.md`, `_bmad/custom/*` including `kit-versions.yaml`, `_bmad/scripts/ledger.sh`, a migrated ledger + its `.legacy.md` if Step 1 migrated one, `.claude/settings.json` if Step 3b ran, backups), NOT just the kit source documents. Never `git add -A`: it sweeps unrelated work in progress, and any untracked file that is not gitignored (a secret included), into the install commit. On `main`, `master` or `develop`, ask the user before committing there. Verify afterward that `git status --short` lists none of the output files; any other entry is the user's own work, which the next run's clean-tree gate will also stop on — tell them. (Pilot finding 2026-07-11: an upgrade session committed only the kit documents and left every output file dirty.)
+**Commit the OUTPUT, completely.** Stage the output set by path and commit it with a message naming the kit version applied — the output set is the installed files (`.claude/commands/epic-cycle.md`, `_bmad/custom/*` including `kit-versions.yaml`, `epic-cycle-unattended.md` and `unattended.yaml`, `_bmad/scripts/ledger.sh`, `_bmad/scripts/unattended-inbox.sh`, `.gitignore`, `.gitattributes`, a migrated ledger + its `.legacy.md` if Step 1 migrated one, `.claude/settings.json` if Step 3b ran, backups), NOT just the kit source documents. Never `git add -A`: it sweeps unrelated work in progress, and any untracked file that is not gitignored (a secret included), into the install commit. On `main`, `master` or `develop`, ask the user before committing there. Verify afterward that `git status --short` lists none of the output files; any other entry is the user's own work, which the next run's clean-tree gate will also stop on — tell them. (Pilot finding 2026-07-11: an upgrade session committed only the kit documents and left every output file dirty.)
 
 **⚠️ Tell the user explicitly — session restart required.** A session that has already invoked `/epic-cycle` holds the OLD command text in its context; this install/upgrade takes effect only in NEW sessions and invocations. Instruct the user, verbatim: close this session and any session currently mid-`/epic-cycle`, and start a fresh session before the next `/epic-cycle`.
 

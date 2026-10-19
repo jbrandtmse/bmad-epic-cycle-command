@@ -1,9 +1,9 @@
 # `/epic-cycle --unattended` and `--review`: design
 
-Status: **revised after an adversarial review (§19), and re-approved by the owner on 2026-10-18.**
+Status: **revised after an adversarial review (§19), re-approved by the owner on 2026-10-18, and implemented in Kit-Version 2026-10-19.1.**
 - The owner approved the first version on 2026-10-18.
 - The review found it not implementable as written. The owner approved four of the revisions the same day (§19), then the revised design as a whole.
-- **Not implemented yet:** implementation starts when the owner says so. The kit fixes it depends on (§16) shipped in Kit-Version 2026-10-18.1.
+- **Implemented in Kit-Version 2026-10-19.1** (base and parallel), after the kit fixes it depends on (§16) shipped in 2026-10-18.1. The doctrine is `_bmad/custom/epic-cycle-unattended.md` (sections U1–U14). Not yet field-tested.
 - The field-trial project is undecided; the owner is first watching how OcuTalon does with its hand-written workaround.
 
 Sources:
@@ -158,6 +158,8 @@ notify: {push: true}
 2. Restore the story's source paths to `story_base` in one commit, `chore(epic-N): set aside <story> (<inbox id or reason>)`. This is a forward commit, never a reset, so it is safe whether or not the story's commits were pushed. It is Rule 16's second sanctioned source-file bookkeeping commit.
 3. Set the spec and the tracker back to `ready-for-dev`. Log `story_set_aside patch=<path> sha=<commit>`.
 4. If the story had been pushed, its set-aside head goes through CI like any head. Green continues; red stops the epic.
+
+*Changed 2026-10-19 (owner decision): a story that changed a submodule is not set aside; its epic stops instead. A set-aside also needs every later story's code to be absent from its range, and the patch to have been saved and checked before anything is restored (doctrine U4).*
 
 **Picking a set-aside story up again:**
 1. Apply the patch three-way on the current head, and set the spec's review baseline to the commit before the apply, so review sees the whole story.
@@ -437,6 +439,8 @@ answer:
 
 ## 13. `/epic-cycle --review` (attended)
 
+*Changed 2026-10-19 (owner decision, after the implementation review): `--review` only records. Answers go into the inbox through its script; it never merges, commits, checks anything out, or resolves an item whose pipeline work is pending. The run applies every answer, held merges included, at its next story boundary or next launch. The live-run paragraph and item 4 below are superseded accordingly (doctrine U13).*
+
 The owner runs it when checking in. It runs no pipeline stage and edits no source; its writes are bookkeeping, plus held merges when no run is live.
 
 **A live run:** if `<state>/run.lock` is present, `--review` shows its run id, start time and last story boundary, and asks the owner whether that run is still going. It is attended, so it can ask.
@@ -567,6 +571,8 @@ The 2026-10-18 adversarial review of the kit itself found defects at gates this 
 4. A headless `rejected` verdict holds the merge, and its action items go forward and are listed for the owner (U-18).
 
 The owner then re-approved the revised design as a whole, and approved the kit release its §16 prerequisites shipped in (2026-10-18.1).
+
+**Third review: an adversarial review of the implementation (Kit-Version 2026-10-19.1, before its release), 2026-10-19.** Two reviewers, one on the doctrine's logic and one on the mechanics (the inbox script on bash 3.2 with BSD awk, gawk, mawk and busybox awk; the install steps; the git procedures on git 2.34 and 2.50), found 55 defects between them (1 Critical, 13 High). Among them: a second set-aside of the same story wiped later stories' code; a set-aside committed files the story's `.gitignore` had hidden; a HOLD that no resume cleared; `--review` resolving answers before the run applied them; runners running the launch and releasing the orchestrator's lock; a blocked runner re-spawned forever; parallel answers applied twice; the runner's retrospective written after its final push. All were fixed, and a re-review by two fresh reviewers then found 43 more (4 High — among them a parallel run that could not resume from a hold, and a Step 4 check that could run `rm -rf /` on a busybox system), all fixed before release; a third round, walking whole runs through the text and attacking the mechanics again, found 38 more (5 High — among them a hold that lost a code review's work, a pre-flight check that stopped every relaunch and runner, and a conflicted pick-up that wiped an answer just applied), and those were fixed too; a fourth, limited to hold, resume and pick-up, found 21 more (6 High — among them a dead stage's evidence patch that blocked every later answer, a usage-limit cut-off whose re-run point was lost so QA's tests could vanish, a staged pick-up a dead stage or later commit could lose or split, a resumed hold that committed files no stage reported, and `apply.whitespace` rewriting or refusing patches), and those were fixed: a pick-up is committed at once, a hold returns its work with a plain `git apply`, every apply uses `--whitespace=nowarn`, dead-stage evidence lives apart and logs where to re-run, holds rank so an automatic one never replaces the owner's, and runners check the time and usage triggers themselves. One residual is accepted: a session whose lock was taken over and that compacts before its next heartbeat could read the new token from the log; a takeover of a live session needs the owner's confirmation or a relaunch loop started beside it, which the README forbids. The owner decided three on 2026-10-19: submodule stories stop their epic instead of being set aside; `--review` only records (above); and parallel runs ship with this release rather than later. The implementation also departs from the design in three small ways: hashes are `git hash-object`, a relaunch is marked by `EPIC_CYCLE_RELAUNCH=1`, and runners report parks at once through `## Clarification Needed`.
 
 Where each finding landed:
 
