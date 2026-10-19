@@ -1,6 +1,6 @@
 I need you to update the model configuration for all BMAD Method skills to optimize performance against token cost for this project's stack.
 
-**Kit-Version:** 2026-09-11.1
+**Kit-Version:** 2026-10-18.1
 
 **Requires BMAD Method 6.11.0–6.12.x.** BMAD v7 reorganizes its skills, so this inventory does not apply there. The skill inventory below reflects the v6.11 tree (`bmad-build` / `bmad-build-auto`, the eight-skill core, the `v6-shims`); on a 6.10 install use the previous version of this document.
 
@@ -223,4 +223,4 @@ Please read the files, apply the updates, and provide a brief summary of the fil
 
 Create/update `_bmad/custom/kit-versions.yaml` with `skill-optimization: <this document's Kit-Version>` — the parallel kit's upgrade check reads this registry.
 
-**⚠️ Tell the user explicitly — session restart required.** Model pins apply when a skill or the `/epic-cycle` command is next loaded; a session already mid-`/epic-cycle` keeps its old tiers. Commit ALL modified SKILL.md files + the command (`git add -A`; verify `git status --short` is clean), then instruct the user to start a fresh session before the next `/epic-cycle`.
+**⚠️ Tell the user explicitly — session restart required.** Model pins apply when a skill or the `/epic-cycle` command is next loaded; a session already mid-`/epic-cycle` keeps its old tiers. Commit ALL modified SKILL.md files + the command, staged by path (never `git add -A`: it sweeps unrelated work and any untracked secret into the commit; verify `git status --short` lists none of them afterward), then instruct the user to start a fresh session before the next `/epic-cycle`.
