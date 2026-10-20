@@ -1,6 +1,6 @@
 # Epic Cycle Workflow — Installation Kit
 
-**Kit-Version:** 2026-10-19.2
+**Kit-Version:** 2026-10-19.3
 
 **Requires BMAD Method 6.11.0–6.12.x, not v7** (`_bmad/_config/manifest.yaml` → `installation.version`; 6.12.2 recommended — its helper scripts write UTF-8 on Windows). BMAD v7, which the 6.12.2 installer advertises as a preview, replaces what this kit drives; Step 1 and the command's pre-flight refuse it. This kit drives the v6.11 Phase-4 chain — `bmad-sprint-planning → bmad-build-auto → bmad-code-review` — and its rendered skills need `uv` (Python 3.11+ provisioned by uv) on PATH. For BMAD ≤ 6.10 projects use the last pre-6.11 kit release; do not install this kit there.
 
@@ -825,7 +825,7 @@ Names used below:
    - The policy exists and parses: `uv run --no-cache --no-project --with pyyaml python -c "import sys, yaml; d = yaml.safe_load(open(sys.argv[1])); print(sorted(d))" _bmad/custom/unattended.yaml` lists at least `gates`, `hard_stops`, `limits`, `owner_only`, `veto_window`. (`--no-project`: never let uv resolve or lock the project's own Python dependencies.)
    - **Permission mode:** ask the owner to confirm the session runs in `bypassPermissions` (or `auto`) mode — the agent cannot reliably detect it, and one permission prompt stalls the loop. Log `permission_mode_attested mode=<…>`. Asked at every interactive launch; a relaunch reuses this run's logged attestation (its command line carries the mode).
    - **Session type:** an interactive session (terminal, IDE, desktop), or a relaunch under `claude -p`. A `claude -p` parallel run needs `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0`.
-   - **CI mode.** If the pre-flight found `ci=none` or `ci=unavailable`, or the first epic's CI check found no workflow on a push to its branch (`no_push_trigger`), and the policy's `ci.without_ci` is empty, ask the owner: `local_green` (merge on the full suite plus the smoke) or `hold` (merges wait; a sequential run then ends at the first epic close). Log `ci_mode_chosen without_ci=<…>`.
+   - **CI mode.** If the pre-flight found `ci=none` or `ci=unavailable`, or the first epic's CI check found no workflow on a push to its branch (`no_push_trigger`), and the policy's `ci.without_ci` is empty, ask the owner (a run that gains CI later — `ci_mode_changed` — is gated from then on, and this choice no longer applies): `local_green` (merge on the full suite plus the smoke) or `hold` (merges wait; a sequential run then ends at the first epic close). Log `ci_mode_chosen without_ci=<…>`.
    - **Repository visibility:** `gh repo view --json visibility -q .visibility` (or ask); log it. On a public repository, pushing the epic branch is routine; a secret in anything pushed is a security incident (U3).
    - **Push notifications:** check whether a push-notification tool is available to this session (Claude Code's `PushNotification`, loaded with `ToolSearch` if deferred). If not, log `notify_unavailable` — the inbox alone carries the items.
    - **The run lock:** `INBOX run-status`. `none` → continue. A lock (exit 3) names a run id, holder and heartbeat age:
@@ -909,7 +909,7 @@ Each row overrides the command passage it names.
 **CI** ("CI Is a Gate")
 - **Red on the story just committed:** the rework path. Unfixable within the cap → stop the story and set it aside (U4).
 - **Red matching a ledgered flake:** one rerun and an `occurrence=` bump; green continues, red takes the rework path.
-- **Infrastructure reds:** re-run each red run `CI status` lists (`gh run rerun <id> --failed`) and watch them — the runs' own duration paces the retries. Three infrastructure reds in a row, or a run still queued — or a required workflow still without a run (`missing=`), or CI unreadable (`result=unavailable`) — past `ci.queue_minutes` (counted from the push's log entry), → the CI outage rule: resolution point 1 is relaxed for at most `limits.unverified_stories` story — its successor may be committed locally, unpushed. When CI returns, push the stacked heads one at a time, oldest first, resolving each before the next push, so a red is charged to the right story. Blocked past `ci.blocked_hours` → stop the epic. (A red on a story with a stacked successor stops the epic — U4 never sets it aside.)
+- **Infrastructure reds:** re-run each red run `CI status` lists (`gh run rerun <id> --failed`) and watch them — the runs' own duration paces the retries. Three infrastructure reds in a row, or a run still queued or `waiting` for an approval — or a required workflow still without a run (`missing=`), or CI unreadable (`result=unavailable`) — past `ci.queue_minutes` (counted from the push's log entry), → the CI outage rule: resolution point 1 is relaxed for at most `limits.unverified_stories` story — its successor may be committed locally, unpushed. When CI returns, push the stacked heads one at a time, oldest first, resolving each before the next push, so a red is charged to the right story. Blocked past `ci.blocked_hours` → stop the epic. (A red on a story with a stacked successor stops the epic — U4 never sets it aside.)
 - **Inherited red:** rerun once. Then one fix-forward story per root cause (keyed by the first red sha, `limits.fix_forward_per_cause`), only if the failing code lies in this epic's own changes (`git diff --name-only <feature>...HEAD`); it is a veto item. Otherwise, or after that, stop the epic.
 - **CI unavailable at the merge gate** (SC-4's "ask the user to confirm CI by hand"), for an epic without readable CI (`ci=unavailable`, or `no_push_trigger`): as chosen at launch — merge on local green, or hold the merge. A `ci=gh` epic whose CI cannot be read is an outage: the CI outage rule, never a merge on local green.
 
@@ -1410,7 +1410,7 @@ esac
 
 ### File 10: `_bmad/scripts/ci-gate.py` (verbatim)
 
-The CI gate the command calls `CI` (`uv run --no-cache _bmad/scripts/ci-gate.py`; its inline `# /// script` header names its one dependency, `ruamel.yaml`, the one BMAD's own `sprint_plan.py` uses). A push can start several workflows, and the gate is every one of them. The script reads the workflow files at the pushed commit and works out which ones a push to the branch starts: GitHub's branch filters decide, and a `paths` filter is judged against the commit's own changes. It then lists every push run for that commit through `gh`, takes each workflow's latest run, and gives one verdict. A workflow still running, red, or never started is never missed the way a single `gh run list … -L 1` misses it (field report 2026-10-19).
+The CI gate the command calls `CI` (`uv run --no-cache _bmad/scripts/ci-gate.py`; its inline `# /// script` header names its one dependency, `ruamel.yaml`, the one BMAD's own `sprint_plan.py` uses). A push can start several workflows, and the gate is every one of them. The script reads the workflow files at the pushed commit and works out which ones a push to the branch starts: GitHub's branch filters decide, and a `paths` filter is judged on the whole push, whose range GitHub's push activity names. It then lists every push run for that commit through `gh`, takes each workflow's latest run, and gives one verdict. A workflow still running, red, or never started is never missed the way a single `gh run list … -L 1` misses it (field report 2026-10-19).
 
 ```python
 # /// script
@@ -1432,11 +1432,13 @@ expected  the workflows a push of <sha> (default HEAD) to <branch> starts, judge
 status    judges the push that carried <sha>, as GitHub does: the push's whole range decides a paths filter (GitHub's
           push activity names it), and a commit pushed beneath others is judged by that push's head. It lists every
           push run for the judged commit, takes each workflow's latest, and adds each required workflow with no run
-          yet. A push that started no workflow (it changed nothing a paths filter watches) carries the verdict of the
-          last push before it that ran CI. First line, always:
-            result=<success|failure|cancelled|pending|untriggered|none|unavailable> sha=<asked> branch= runs=<id,...|none> missing=<path,...|none> via=<sha|none>
-          `via=` names the commit the verdict comes from when it is not <sha>. Then one line per workflow:
-          path TAB required|conditional|optional|extra TAB run id|- TAB status TAB conclusion|- TAB url|-
+          yet. A paths-filtered workflow this push did not start keeps its latest run on an earlier commit of the
+          branch (`carried`: the code it watches has not changed since) - but for 300 s after the push, and whenever
+          GitHub's decision cannot be known (more than 300 files, a force push), it is waited for instead. First line:
+            result=<success|failure|cancelled|pending|untriggered|none|unavailable> sha=<asked> branch= runs=<id,...|none> missing=<path,...|none> via=<sha,...|none>
+          `via=` names the other commits the verdict draws on: the push head that carried <sha>, and the commits
+          carried runs belong to. Then one line per workflow:
+          path TAB required|conditional|optional|carried|extra TAB run id|- TAB status TAB conclusion|- TAB url|- TAB head sha
           (`extra`: a workflow the files did not predict but GitHub ran; its result counts all the same).
 Results and exit codes (act on the `result=` line; uv and Python have exit codes of their own):
   success 0      every run green (`skipped`, `neutral` count as green)
@@ -1446,15 +1448,17 @@ Results and exit codes (act on the `result=` line; uv and Python have exit codes
   none 13        no active workflow runs on a push to this branch at all
   unavailable 14 gh missing or unauthenticated, an API or network error, a CI-skip token in the commit message, a
                  broken _bmad/custom/ci-gate.yaml, or any other failure of this script
-  untriggered 15 workflows exist, but no push up to this commit ever started one (each changed nothing they watch)
+  untriggered 15 workflows exist, but none has a run on this push or a carried one (nothing they watch ever changed)
 _bmad/custom/ci-gate.yaml (optional, project-owned): `optional: [.github/workflows/<file>, ...]` - workflows the gate
 never waits for (a finished run of one still counts). CI_GATE_GH names a gh-compatible executable (default `gh`).
 """
+import datetime
 import json
 import os
 import re
 import subprocess
 import sys
+import time
 import urllib.parse
 
 from ruamel.yaml import YAML
@@ -1469,6 +1473,7 @@ CONFIG = "_bmad/custom/ci-gate.yaml"
 ZERO = "0" * 40
 DIFF_LIMIT = 300  # GitHub judges a paths filter on at most 300 changed files; beyond that it may skip the workflow
 WORKFLOW_FILE = re.compile(r"\.github/workflows/[^/]+\.ya?ml")
+FRESH = 300  # seconds after a push in which GitHub may still start a workflow
 
 
 class Unavailable(Exception):
@@ -1489,10 +1494,12 @@ def run(cmd):
 
 
 def is_ancestor(a, b):
+    """True, False, or None when git cannot tell (an object that is not here)."""
     try:
-        return subprocess.run(["git", "merge-base", "--is-ancestor", a, b], capture_output=True, timeout=90).returncode == 0
+        rc = subprocess.run(["git", "merge-base", "--is-ancestor", a, b], capture_output=True, timeout=90).returncode
     except (OSError, subprocess.TimeoutExpired):
-        return False
+        return None
+    return True if rc == 0 else False if rc == 1 else None
 
 
 def load_yaml(text):
@@ -1640,9 +1647,8 @@ def expected(branch, sha, optional, files):
 
 
 # ---- the verdict ----------------------------------------------------------------------------------------
-def verdict(exp, states, runs, sha):
-    """exp: [(path, kind, name)]; states: {path: workflow state}; runs: [dict with "path"]. Returns (result, rows)."""
-    kinds = {p: k for p, k, _ in exp}
+def latest_by_path(runs, sha):
+    """{workflow path: its latest run on `sha`}."""
     latest = {}
     for r in runs:
         if r.get("headSha") != sha:
@@ -1650,21 +1656,33 @@ def verdict(exp, states, runs, sha):
         cur = latest.get(r["path"])
         if cur is None or (r.get("createdAt") or "", r.get("databaseId") or 0) > (cur.get("createdAt") or "", cur.get("databaseId") or 0):
             latest[r["path"]] = r
+    return latest
+
+
+def verdict(exp, states, runs, sha):
+    """exp: [(path, kind, name)]; states: {path: workflow state}; runs: [dict with "path"]. Returns (result, rows)."""
+    kinds = {p: k for p, k, _ in exp}
+    latest = latest_by_path(runs, sha)
     rows = [(p, kinds.get(p, "extra"), r) for p, r in latest.items()]
     rows += [(p, k, None) for p, k, _ in exp
              if p not in latest and k == "required" and states.get(p, "active") == "active"]
+    return result_of(rows, exp, states), rows
+
+
+def result_of(rows, exp, states):
+    """The verdict over rows [(path, kind, run-or-None)]; a None run is a workflow GitHub has not started (yet)."""
     rows.sort(key=lambda row: row[0])
     done = [r for _, _, r in rows if r and r.get("status") == "completed"]
     if any((r.get("conclusion") or "") not in GREEN | CANCELLED for r in done):
-        return "failure", rows
+        return "failure"
     if any(r.get("conclusion") in CANCELLED for r in done):
-        return "cancelled", rows
+        return "cancelled"
     if any(r is None or (r.get("status") != "completed" and k != "optional") for _, k, r in rows):
-        return "pending", rows
+        return "pending"
     if rows:
-        return "success", rows
+        return "success"
     live = [p for p, _, _ in exp if states.get(p, "active") == "active"]
-    return ("none" if not live else "untriggered"), rows
+    return "none" if not live else "untriggered"
 
 
 # ---- the repository and its pushes ---------------------------------------------------------------------
@@ -1723,34 +1741,49 @@ class Ctx:
         return run([GH, "api", "--hostname", self.host, *args, endpoint])
 
     def pushes(self):
-        """[(before, after)] of every push to the branch, newest first; None if GitHub's activity cannot be read."""
+        """Every push to the branch, newest first ({before, after, type, ts}); None if GitHub's activity cannot be read.
+        A branch's first push is GitHub's `branch_creation` (before = 000...0); `force_push` rows rewrite history."""
         if self._pushes is False:
             ref = urllib.parse.quote(f"refs/heads/{self.branch}", safe="")
             try:
-                out = self.gh_api(f"repos/{self.owner}/{self.name}/activity?ref={ref}&activity_type=push&per_page=100",
-                                  "--paginate", "--jq", ".[] | [.before, .after] | @tsv")
-                self._pushes = [tuple(l.split("\t")[:2]) for l in out.splitlines() if l.count("\t") >= 1]
+                out = self.gh_api(f"repos/{self.owner}/{self.name}/activity?ref={ref}&per_page=100", "--paginate", "--jq",
+                                  '.[] | select(.activity_type != "branch_deletion") | [.before, .after, .activity_type, .timestamp] | @tsv')
             except Unavailable:
                 self._pushes = None
+                return None
+            self._pushes = []
+            for line in out.splitlines():
+                f = line.split("\t")
+                if len(f) >= 4:
+                    self._pushes.append({"before": f[0], "after": f[1], "type": f[2], "ts": epoch(f[3])})
         return self._pushes
 
     def push_of(self, sha):
+        """(push, listed): the push that carried `sha` - the one whose head it is, or the one that carried it beneath its
+        head - and whether GitHub's activity shows `sha` on the branch at all (False: not yet, so a push of it is still
+        arriving; None: cannot tell - no activity, or older than the activity GitHub keeps)."""
         plist = self.pushes() or []
-        for before, after in plist:
-            if after == sha:
-                return before, after
-        for before, after in reversed(plist):  # oldest first: the push that carried it beneath its head
-            if is_ancestor(sha, after) and (before == ZERO or not is_ancestor(sha, before)):
-                return before, after
-        return None
+        for p in plist:
+            if p["after"] == sha:
+                return p, True
+        seen = False
+        for p in plist:  # newest first; stop as soon as the answer is known
+            on_head = is_ancestor(sha, p["after"])
+            if on_head is None:
+                continue  # that head is not here (not fetched): look at an older push
+            if not on_head:
+                return None, (False if not seen else None)  # not under the newest head GitHub lists
+            seen = True
+            if p["before"] == ZERO:
+                return p, True
+            below = is_ancestor(sha, p["before"])
+            if below is False:
+                return p, True
+            if below is None:
+                return None, None  # a force push whose old head is gone: cannot tell
+        return None, None
 
-    def runs(self, sha):
-        try:
-            runs = json.loads(run([GH, "run", "list", "-R", f"{self.host}/{self.owner}/{self.name}", "--branch", self.branch,
-                                   "--commit", sha, "--event", "push", "-L", "200", "--json",
-                                   "databaseId,workflowDatabaseId,workflowName,status,conclusion,headSha,createdAt,url"]) or "[]")
-        except ValueError:
-            raise Unavailable("gh run list did not return JSON")
+    def map_paths(self, runs):
         if not isinstance(runs, list) or not all(isinstance(r, dict) for r in runs):
             raise Unavailable("gh run list returned an unexpected shape")
         for r in runs:
@@ -1763,52 +1796,87 @@ class Ctx:
             r["path"] = self.paths.get(wid) or f"workflow-id:{wid}"
         return runs
 
-    def last_ran_before(self, sha):
-        """Fallback without push activity: the nearest earlier commit on the branch that has push runs."""
+    def run_list(self, *args):
         try:
-            heads = {r.get("headSha") for r in json.loads(run([GH, "run", "list", "-R", f"{self.host}/{self.owner}/{self.name}",
-                                                               "--branch", self.branch, "--event", "push", "-L", "200",
-                                                               "--json", "headSha"]) or "[]")}
+            return self.map_paths(json.loads(run([GH, "run", "list", "-R", f"{self.host}/{self.owner}/{self.name}",
+                                                  "--branch", self.branch, "--event", "push", "-L", "200", *args, "--json",
+                                                  "databaseId,workflowDatabaseId,workflowName,status,conclusion,headSha,createdAt,url"]) or "[]"))
         except ValueError:
             raise Unavailable("gh run list did not return JSON")
-        if not run(["git", "rev-list", "--parents", "-n", "1", sha]).split()[1:]:
-            return None  # a root commit: nothing before it
+
+    def runs(self, sha):
+        return self.run_list("--commit", sha)
+
+    def carried(self, sha, wanted):
+        """{path: (run, from-sha)} - for each wanted workflow, its latest run on the nearest earlier commit of the branch
+        (first parents) that has one. The code a paths filter watches has not changed since that run."""
+        if not wanted or not run(["git", "rev-list", "--parents", "-n", "1", sha]).split()[1:]:
+            return {}
+        by_sha = {}
+        for r in self.run_list():
+            by_sha.setdefault(r.get("headSha"), []).append(r)
+        found = {}
         for c in run(["git", "rev-list", "--first-parent", "-n", "200", f"{sha}^"]).split():
-            if c in heads:
-                return c
-        return None
+            if c in by_sha:
+                for path, r in latest_by_path(by_sha[c], c).items():
+                    if path in wanted and path not in found:
+                        found[path] = (r, c)
+            if len(found) == len(wanted):
+                break
+        return found
 
 
-def judge(ctx, sha, depth=0):
-    """(result, rows, judged sha) for the push that carried `sha`."""
-    push = ctx.push_of(sha)
+def epoch(stamp):
+    try:
+        return datetime.datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return 0.0
+
+
+def judge(ctx, sha):
+    """(result, rows, vias) for the push that carried `sha`. rows: [(path, kind, run-or-None)]; vias: other commits the
+    verdict draws on - the push head that carried `sha`, and any earlier commit a carried run belongs to."""
+    push, listed = ctx.push_of(sha)
     if push:
-        before, judged = push
-        files = None if before == ZERO else diff_files(before, judged)
-    else:
-        judged, files = sha, commit_files(sha)  # no push record (yet): the commit's own changes
-    result, rows = verdict(expected(ctx.branch, judged, ctx.optional, files), ctx.states, ctx.runs(judged), judged)
+        judged, pushed_at = push["after"], push["ts"]
+        exact = push["before"] != ZERO and push["type"] != "force_push"
+        files = diff_files(push["before"], judged) if exact else None
+    else:  # no push record (yet, or GitHub's activity is unreadable): the commit's own changes and its commit time
+        judged, exact = sha, True
+        files = commit_files(sha)
+        pushed_at = time.time() if listed is False else float(run(["git", "log", "-1", "--format=%ct", sha]).strip() or 0)
+    exp = expected(ctx.branch, judged, ctx.optional, files)
+    result, rows = verdict(exp, ctx.states, ctx.runs(judged), judged)
+    vias = [judged] if judged != sha else []
+    started = {p for p, _, r in rows if r}
+    waiting_on = [p for p, k, _ in exp if k == "conditional" and p not in started and ctx.states.get(p, "active") == "active"]
+    if waiting_on:
+        fresh = time.time() - pushed_at < FRESH                     # GitHub may still start them
+        unknowable = (exact and files is None) or (push and push["type"] == "force_push")  # >300 files, rewritten history
+        if fresh or unknowable:
+            rows += [(p, "conditional", None) for p in waiting_on]
+        else:  # GitHub did not start them: the code they watch is unchanged since their latest run on an earlier push
+            for p, (r, c) in ctx.carried(judged, set(waiting_on)).items():
+                rows.append((p, "carried", r))
+                if c not in vias:
+                    vias.append(c)
+        result = result_of(rows, exp, ctx.states)
     if result == "pending" and not any(r for _, _, r in rows):
-        messages = run(["git", "log", "--format=%B", f"{push[0]}..{judged}" if push and push[0] != ZERO else "-1", judged])
+        messages = run(["git", "log", "--format=%B", f"{push['before']}..{judged}" if push and push["before"] != ZERO else "-1", judged])
         if SKIP.search(messages):
             raise Unavailable("a commit message in the push carries a CI-skip token: GitHub starts no push workflow for it; push a commit without one")
-    if result == "untriggered" and depth < 50:
-        prev = push[0] if push and push[0] != ZERO else (None if push else ctx.last_ran_before(judged))
-        if prev:
-            return judge(ctx, prev, depth + 1)
-    return result, rows, judged
+    return result, rows, vias
 
 
-def report(result, rows, sha, branch, judged):
+def report(result, rows, sha, branch, vias):
     ids = [str(r["databaseId"]) for _, _, r in rows if r]
     missing = [p for p, _, r in rows if r is None]
-    via = judged if judged != sha else "none"
-    print(f"result={result} sha={sha} branch={branch} runs={','.join(ids) or 'none'} missing={','.join(missing) or 'none'} via={via}")
+    print(f"result={result} sha={sha} branch={branch} runs={','.join(ids) or 'none'} missing={','.join(missing) or 'none'} via={','.join(vias) or 'none'}")
     for p, k, r in rows:
         if r is None:
             print(f"{p}\t{k}\t-\tnot-started\t-\t-")
         else:
-            print(f"{p}\t{k}\t{r['databaseId']}\t{r.get('status')}\t{r.get('conclusion') or '-'}\t{r.get('url') or '-'}")
+            print(f"{p}\t{k}\t{r['databaseId']}\t{r.get('status')}\t{r.get('conclusion') or '-'}\t{r.get('url') or '-'}\t{r.get('headSha')}")
 
 
 # ---- selftest -------------------------------------------------------------------------------------------
@@ -1901,6 +1969,14 @@ def selftest():
         ("nothing at all", [], {}, [], "none"),
     ]:
         check(f"verdict({label})", verdict(exp, states, runs, S)[0], want)
+    docs = [("w/ci.yml", "conditional", "ci"), ("w/docs.yml", "conditional", "d")]
+    for label, rows, want in [
+        ("carried red beats a green on this push", [("w/docs.yml", "conditional", r(1, "w/docs.yml", "completed", "success")), ("w/ci.yml", "carried", r(2, "w/ci.yml", "completed", "failure", sha="c" * 40))], "failure"),
+        ("carried green", [("w/ci.yml", "carried", r(2, "w/ci.yml", "completed", "success", sha="c" * 40))], "success"),
+        ("held conditional waits", [("w/docs.yml", "conditional", r(1, "w/docs.yml", "completed", "success")), ("w/ci.yml", "conditional", None)], "pending"),
+        ("nothing ran, nothing carried", [], "untriggered"),
+    ]:
+        check(f"result_of({label})", result_of(list(rows), docs, {}), want)
     for line in bad:
         print("FAIL " + line)
     print(f"selftest {'ok' if not bad else 'FAILED'}: {n - len(bad)}/{n} cases")
@@ -1932,8 +2008,8 @@ def main(argv):
             for p, k, name in exp:
                 print(f"{p}\t{k}\t{name}")
             return 0 if exp else EXIT["none"]
-        result, rows, judged = judge(Ctx(branch), sha)
-        report(result, rows, sha, branch, judged)
+        result, rows, vias = judge(Ctx(branch), sha)
+        report(result, rows, sha, branch, vias)
         return EXIT[result]
     except Unavailable as e:
         reason = " ".join(str(e).split())
@@ -2542,24 +2618,26 @@ The smoke is not a substitute for automated tiers; it's the final check that the
 
 Every quality gate in this pipeline runs the suite locally; none of them is the platform the project ships from. The CI run a push starts is therefore a first-class result, recorded write-ahead and resolved before the next irreversible step — never awaited per story (wall-clock), never assumed green.
 
-**`CI`** means `uv run --no-cache _bmad/scripts/ci-gate.py` (installed by the kit). A project may run several workflows per push (field report 2026-10-19: `ci` and `lane-a`), and the gate is every one of them. Never read a single run with a limit of 1: it returns whichever workflow registered first. `CI status --branch <branch> --sha <sha>` reads every push run for that exact commit and takes each workflow's latest. It also adds each workflow that, by the commit's own workflow files, a push to that branch starts but that has no run yet. It judges the push, as GitHub does, and GitHub's push activity names the push's range: a `paths` filter is judged on the whole push, a commit pushed beneath others is judged by its push's head, and a push that started no workflow (it changed nothing a `paths` filter watches) carries the verdict of the last push before it that ran CI. It prints `result=<…> sha= branch= runs=<ids> missing=<paths> via=<sha|none>`, then one line per workflow (run id, status, conclusion, link); `via=` names the commit the verdict comes from when it is not the one asked about. `CI expected --branch <branch>` lists the workflows alone. Ask only about a pushed commit (`git merge-base --is-ancestor <sha> origin/<branch>` after a fetch): for a commit that never reached origin, `missing` means not pushed, not not-yet-registered. Only push-triggered workflows are gated: one that another workflow's completion starts (`workflow_run`) is not. A workflow the gate must never wait for (one held for a manual approval, say) goes in the project-owned `_bmad/custom/ci-gate.yaml` as `optional: [.github/workflows/<file>]`; a finished run of it still counts.
+**`CI`** means `uv run --no-cache _bmad/scripts/ci-gate.py` (installed by the kit). A project may run several workflows per push (field report 2026-10-19: `ci` and `lane-a`), and the gate is every one of them. Never read a single run with a limit of 1: it returns whichever workflow registered first. `CI status --branch <branch> --sha <sha>` reads every push run for that exact commit and takes each workflow's latest. It also adds each workflow that, by the commit's own workflow files, a push to that branch starts but that has no run yet. It judges the push, as GitHub does, and GitHub's push activity names the push's range: a `paths` filter is judged on the whole push, a commit pushed beneath others is judged by its push's head, and a `paths`-filtered workflow the push did not start keeps the result of its own latest run on an earlier commit of the branch (the code it watches has not changed since). For 300 seconds after a push, and whenever GitHub's decision cannot be known (more than 300 changed files, a force push), such a workflow is waited for instead (`pending`): GitHub may still start it. It prints `result=<…> sha= branch= runs=<ids> missing=<paths> via=<sha|none>`, then one line per workflow (run id, status, conclusion, link); `via=` names the other commits the verdict draws on: the push head that carried the commit asked about, and the commits whose runs were carried. `CI expected --branch <branch>` lists the workflows alone. Ask only about a pushed commit (`git merge-base --is-ancestor <sha> origin/<branch>` after a fetch): for a commit that never reached origin, `missing` means not pushed, not not-yet-registered. Only push-triggered workflows are gated: one that another workflow's completion starts (`workflow_run`) is not. A workflow the gate must never wait for (one held for a manual approval, say) goes in the project-owned `_bmad/custom/ci-gate.yaml` as `optional: [.github/workflows/<file>]`; a finished run of it still counts.
 
 **Reading the result** — always the first line's `result=`, never the exit code alone: `uv` and Python have exit codes of their own, and output with no `result=` line counts as `unavailable`.
 - `success` — every run green (`skipped` and `neutral` count as green). Exit 0.
-- `failure` — any red: `failure`, `timed_out`, `startup_failure`, `action_required`. A red outranks a run still going, so act on it at once: classify it (below). Exit 10.
+- `failure` — any red: `failure`, `timed_out`, `startup_failure`, `action_required`, `stale` — on this push, or carried from an earlier one. A red outranks a run still going, so act on it at once: classify it (below). Exit 10.
 - `cancelled` — re-check the head you are gating; a run cancelled on that head is re-run (`gh run rerun <id>`) and waited for. Exit 11.
 - `pending` — a run queued or running, or a required workflow with no run yet (`missing=`): wait. Exit 12.
-- `untriggered` — workflows exist, but no push up to this commit ever started one: each changed nothing a `paths` filter watches. It passes like `success`, logged as `untriggered`. Read within two minutes of its push, read it again after about 90 s first: where GitHub's push activity cannot be read, a run not yet registered looks the same. Exit 15.
+- `untriggered` — workflows exist, but no push up to this commit ever started one: each changed nothing a `paths` filter watches. It passes like `success`, logged as `untriggered`. Exit 15.
 - `none` — no active workflow runs on a push to this branch at all (every one disabled counts). On an epic branch, the epic runs as `ci=unavailable reason=no_push_trigger`, as the per-epic check would have found. On the feature branch it passes, logged as `none`: the feature head is a merge of CI-verified epic heads. It is not the pre-flight's `ci=none`, a project without CI. Exit 13.
 - `unavailable` — `gh` missing or unauthenticated, an API or network error, or a CI-skip token in the commit message (the reason says which): retry about a minute apart, three times, then treat it as an infrastructure outage (surface it; *Unattended:* U5's CI outage rule). Exit 14.
 
 **Pre-flight (once per run, on `runtime_gate`):** `ci=gh` when `.github/workflows/` holds a `*.yml` or `*.yaml` workflow, `gh auth status` succeeds, and `origin` is a GitHub remote (each epic then checks that a workflow runs on a push to its branch — below); `ci=none` only when the repo has no CI configuration at all (no GitHub workflow and none of `.gitlab-ci.yml`, `azure-pipelines.yml`, `.circleci/config.yml`, `Jenkinsfile`, `bitbucket-pipelines.yml`, `.buildkite/`, `.travis.yml`, `.drone.yml`); `ci=unavailable` when CI exists but its results cannot be read here — `gh` missing or unauthenticated, a non-GitHub remote, or another CI system — surface `unavailable` once ("CI results cannot be read from this session; the merge gate will ask you to confirm CI by hand") rather than silently skipping.
 
+**CI can arrive mid-run.** At each epic's start, and after any `committed` whose push changed `.github/workflows/`, repeat the pre-flight's CI test. A run that began with `ci=none` and now finds a workflow logs `ci_mode_changed from=none to=gh sha=<sha>`, and every later push is gated as for `ci=gh` (*Unattended:* the launch choice for a run without CI no longer applies).
+
 **Per epic, once its branch is named** (Task Sequence step 4): with `ci=gh`, `CI expected --branch {TICKET}-epic{N}` must list a workflow. If it lists none, no workflow runs on a push to the epic branch: the epic runs as `ci=unavailable reason=no_push_trigger` (on its `epic_branch_checked_out` entry), surfaced once — "no workflow runs on a push to `{TICKET}-epic{N}`; the merge gate will ask you to confirm CI by hand" (*Unattended:* the first epic's check runs in the attended setup, U2; a later epic follows `ci.without_ci`, or stops if it is empty).
 
 **At `committed`:** after the push, `CI status --branch {TICKET}-epic{N} --sha <sha>` (retry a few times over ~30 s while it reports a workflow `missing` — runs register shortly after the push); record `ci=pending runs=<ids>` — always `pending`, even when every listed run has finished: a `paths`-filtered workflow may register later, and resolution point 1 re-reads them all (`ci=none` / `ci=unavailable` per pre-flight). No waiting. Push the code commit on its own and confirm every workflow's run registered for that exact sha (`missing=none`) before any further push to the branch — a workflow with `concurrency: cancel-in-progress` cancels the run being waited on when a later push lands. Never put a CI-skip token in a code commit's message: a quoted `[skip ci]` skips the run all the same.
 
-**Resolution points — each logs `ci_resolved story=<id> sha=<sha> runs=<ids> result=<success|failure|cancelled|untriggered|none> failed=<workflow paths|none>`:** (1) before the next story's implement spawn (Task Sequence per-story step 4) — the next story's plan, spec validation and spec gate proceed meanwhile, and a red reworks the previous story first while the new spec waits at `ready-for-dev` (field report 2026-10-10: waiting at the plan spawn idled the lead about 30 minutes per story); (2) at the burn-down gate; (3) at SC-4 / SC-4-P as the merge precondition (`ci_green_verified` on the branch head, or `merge_gate_blocked reason=ci_red`); (4) at resume (cross-stage integrity check 6). `CI status --branch <branch> --sha <sha>` re-reads every run, so one that registered late counts too. `pending` → wait here, with jitter, up to the project's usual run time; a required workflow still `missing` after that is surfaced like a red (*Unattended:* U5's queue limit).
+**Resolution points — each logs `ci_resolved story=<id> sha=<sha> runs=<ids> result=<success|failure|cancelled|untriggered|none> failed=<workflow paths|none> via=<shas|none>`:** (1) before the next story's implement spawn (Task Sequence per-story step 4) — the next story's plan, spec validation and spec gate proceed meanwhile, and a red reworks the previous story first while the new spec waits at `ready-for-dev` (field report 2026-10-10: waiting at the plan spawn idled the lead about 30 minutes per story); (2) at the burn-down gate; (3) at SC-4 / SC-4-P as the merge precondition (`ci_green_verified` on the branch head, or `merge_gate_blocked reason=ci_red`); (4) at resume (cross-stage integrity check 6). `CI status --branch <branch> --sha <sha>` re-reads every run, so one that registered late counts too. `pending` → wait here, with jitter, up to the project's usual run time; a required workflow still `missing`, or a run `waiting` for an approval, after that is surfaced like a red (*Unattended:* U5's queue limit).
 
 **On `failure` — classify first, then act; log `ci_red_classified run=<id> workflow=<path> class=<story|flake|infra> test=<name|none>` for each red run `CI status` lists — the infrastructure streak and the first red commit are counted per workflow.** `infra`: the run failed before any test ran (runner lost, image-pull or registry limit, network, provisioning) — re-run it on a timer, about 10, 20, then 40 minutes apart (`gh run rerun <id> --failed`), and never count it as rework; three infra reds in a row → surface to the user (*Unattended:* re-run and poll, then doctrine U5's CI rows). `flake`: the failing test already has an open `flake:` ledger entry, or it fails and then passes on one unchanged rerun — rerun once, and file a `flake: <test>` ledger entry (or append an `occurrence=`) routed to the burn-down with priority; the same test red twice on the same head is `story`. `story`: anything else — the path that follows. (Field report 2026-10-10: five different flaky tests forced reruns in two days, and one merge needed five attempts — a flake, then three registry pull-limit failures in which no test ran.)
 
@@ -2567,7 +2645,7 @@ Every quality gate in this pipeline runs the suite locally; none of them is the 
 
 **Runner mode (parallel kit):** identical inside the worktree; the completion contract carries `ci: <success|untriggered|none|unavailable> runs=<ids>` for `head:`, and the orchestrator verifies it independently (`CI status`) before the merge gate.
 
-**Verified on origin, never inferred from an exit status.** `committed`, `ci_green_verified` and `epic_merged_to_feature` are written only after `git fetch` and `git merge-base --is-ancestor <sha> origin/<branch>` succeed for the pushed or merged sha, and — for a green — `CI status` reports `result=success` (or `untriggered`) for that exact sha (it reads only runs whose `headSha` is that sha, and every workflow's). (Field report 2026-10-10: a merge was reported but never pushed; an `&&` guard skipped the push silently.)
+**Verified on origin, never inferred from an exit status.** `committed`, `ci_green_verified` and `epic_merged_to_feature` are written only after `git fetch` and `git merge-base --is-ancestor <sha> origin/<branch>` succeed for the pushed or merged sha, and — for a green — `CI status` reports `result=success` (or `untriggered`) for that exact sha (every workflow's: the runs on that push, and a `paths`-filtered workflow's carried run, named by `via=`). (Field report 2026-10-10: a merge was reported but never pushed; an `&&` guard skipped the push silently.)
 
 ### Ledger Drain (Critical Gates — Rule 17)
 
@@ -2760,7 +2838,7 @@ After the retrospective gate (whether opted in or not), the lead pauses (*Unatte
 
 > "Epic {N} is complete. Merge `{TICKET}-epic{N}` into the feature branch and delete the epic branch (local + remote) in every affected repo?"
 
-**Precondition — the branch head's CI is green.** CI judged the epic's last pushed commit, not the epic-close bookkeeping commits on top of it: those are never pushed on their own, and the merge carries them. `git fetch origin {TICKET}-epic{N}`; `H=$(git rev-parse origin/{TICKET}-epic{N})`; `git merge-base --is-ancestor $H HEAD` must hold — if it does not, or `origin/{TICKET}-epic{N}` is missing, stop and surface it: never merge, never delete the remote branch — and every file `git diff --name-only $H HEAD` lists must be a bookkeeping path (Rule 16: `<impl>`, `<planning>`, `_bmad/custom/model-overrides.yaml`). Anything else is pushed and its CI resolved first. Then `CI status --branch {TICKET}-epic{N} --sha $H` (or the equivalent for the project's CI): `success` on every workflow — or `untriggered` (nothing a workflow watches changed), or the pre-flight's `ci=none` for a project without CI — is required; `failure` → log `merge_gate_blocked reason=ci_red runs=<the red runs> job=<name>` and surface the failing job instead of the merge question — the branch is not mergeable while it is red, whatever the local suite says (field report 2026-08-30: a branch red for ~16 h passed two full story pipelines); `pending` → wait; `unavailable` → retry as "Reading the result" says. Confirming CI by hand (*Unattended:* as chosen at launch — U2) is only for an epic that runs without readable CI: `ci=unavailable` at the pre-flight, or `reason=no_push_trigger`. With `ci=gh`, CI that stays unreadable holds the merge like an infrastructure outage — never a merge on local green. `cancelled` → as "Reading the result" says. Log `ci_green_verified runs=<ids> head=$H` on success.
+**Precondition — the branch head's CI is green.** CI judged the epic's last pushed commit, not the epic-close bookkeeping commits on top of it: those are never pushed on their own, and the merge carries them. In every affected repository, submodules first: `git fetch origin {TICKET}-epic{N}`; `H=$(git rev-parse origin/{TICKET}-epic{N})`; `git merge-base --is-ancestor $H HEAD` must hold — if it does not, or `origin/{TICKET}-epic{N}` is missing, stop and surface it: never merge, never delete the remote branch — and every file `git diff-tree -r --name-only --no-renames $H HEAD` lists must be a bookkeeping path (Rule 16: `<impl>`, `<planning>`, `_bmad/custom/model-overrides.yaml`). Anything else is pushed and its CI resolved first. Then `CI status --branch {TICKET}-epic{N} --sha $H` (or the equivalent for the project's CI): `success` on every workflow — or `untriggered` (nothing a workflow watches changed), or `ci=none` for a project without CI, which this gate confirms: if `CI expected --branch {TICKET}-epic{N} --sha $H` lists a workflow, CI has arrived since the pre-flight, so judge `CI status` at `$H` as for `ci=gh` — is required; `failure` → log `merge_gate_blocked reason=ci_red runs=<the red runs> job=<name>` and surface the failing job instead of the merge question — the branch is not mergeable while it is red, whatever the local suite says (field report 2026-08-30: a branch red for ~16 h passed two full story pipelines); `pending` → wait; `unavailable` → retry as "Reading the result" says. Confirming CI by hand (*Unattended:* as chosen at launch — U2) is only for an epic that runs without readable CI: `ci=unavailable` at the pre-flight, or `reason=no_push_trigger`. With `ci=gh`, CI that stays unreadable holds the merge like an infrastructure outage — never a merge on local green. `cancelled` → as "Reading the result" says. Log `ci_green_verified runs=<ids> head=$H` on success.
 
 Before asking, (1) surface the burn-down gate's result for this epic (`ledger_burndown_*` entry: what was resolved, made terminal, chartered into the burn-down story, the overflow re-owned to which next-epic keys, and the drain ratio), and (2) run the **epic-close decision sheet** (see "Ledger Drain"): every `escalated` and `decision-pending` entry, presented once with a recommended disposition, the user's answers written as `by=merge_gate` trailer lines and logged `decision_sheet_recorded` — the burn-down gate set these aside precisely because only the user can decide them. If this is the range's FINAL epic, follow the merge with the ledger sweep: `LEDGER slice all` — every remaining non-terminal entry must already be owned by a named story key outside the range; present the list with a recommended disposition for each — the end-of-project triage, sized for one sitting.
 
@@ -3091,6 +3169,7 @@ Per-stage log entries, append-only. File: `_bmad-output/implementation-artifacts
 
 - `feature_branch_created` — SC-1 created the feature branch. Metadata: `repos=<paths>` `ticket=<id>` `description=<desc>` `root=<origin/branch>`.
 - `epic_branch_created` — SC-2 created `{TICKET}-epic{N}`. Metadata: `repos=<paths>` `from=<feature-sha>`.
+- `ci_mode_changed` — A run that began without CI found a workflow ("CI Is a Gate"). Metadata: `from=none` `to=gh` `sha=<sha>`.
 - `epic_branch_checked_out` — Lead checked out `{TICKET}-epic{N}` (resume or after creation). Metadata: `repos=<paths>` `head=<sha>`, plus `ci=unavailable reason=no_push_trigger` when no workflow runs on a push to the epic branch ("CI Is a Gate").
 - `epic_branch_reopened` — SC-5 recreated after a prior merge. Metadata: `reason=<short>` `from=<feature-sha>`.
 - `lead_model_gate` — Pre-flight lead-tier check. Metadata: `model=<detected>` `action=proceed|user_accepted`.
@@ -3142,7 +3221,7 @@ Per-stage log entries, append-only. File: `_bmad-output/implementation-artifacts
 - `ledger_adjudicated`: `owned=N resolved=N reowned=N terminal=N` (`owned` = slice size before; `resolved+reowned+terminal` must equal it).
 - `smoke_complete`: `method=<browser|cli|api|other> result=pass|fail iterations=N defects_caught=N evidence=<path>`.
 - `committed`: `sha=<short-hash> submodules=<paths-or-empty> ci=<pending|none|unavailable> runs=<ids|none>` (`pending` is resolved by a later `ci_resolved`; an older entry may carry `ci=success` or `ci=failure`; a `committed` with `run=<id>` is a pre-2026-10-19.2 entry, one without `ci=` a pre-2026-08-30.2 one).
-- `ci_resolved`: `story=<id> sha=<sha> runs=<ids> failed=<workflow paths|none> result=<success|failure|cancelled|untriggered|none> resolved_at=<next_plan|burndown|merge_gate|resume>`.
+- `ci_resolved`: `story=<id> sha=<sha> runs=<ids> failed=<workflow paths|none> via=<shas|none> result=<success|failure|cancelled|untriggered|none> resolved_at=<next_plan|burndown|merge_gate|resume>`.
 
 **Cost telemetry (when available):** `input_tokens=N output_tokens=N cost_usd=X.XX` on any `*_complete` entry. Omit if not extractable.
 
@@ -3551,7 +3630,7 @@ After writing all files, run these checks:
 2d. **The CI gate is installed and sound:**
    ```bash
    ls _bmad/scripts/ci-gate.py
-   uv run --no-cache _bmad/scripts/ci-gate.py selftest                   # selftest ok: 74/74 cases (filter patterns, triggers, paths, remotes, verdicts)
+   uv run --no-cache _bmad/scripts/ci-gate.py selftest                   # selftest ok: 78/78 cases (filter patterns, triggers, paths, remotes, verdicts)
    grep -c "ci-gate.py" .claude/commands/epic-cycle.md                    # >= 1 (the CI shorthand)
    grep -c "CI status" .claude/commands/epic-cycle.md                     # >= 8 (every CI read: commit, resolution, merge gate, resume)
    grep -cE 'gh run view|(-L|--limit) ?1([^0-9]|$)' .claude/commands/epic-cycle.md          # 0 (no CI read takes a single run)
@@ -3636,6 +3715,7 @@ The workflow is ready to use. Projects can add custom rules to `_bmad/custom/ski
 
 - **Sequential run — safe at a story boundary.** Upgrade after a story's `committed` entry and before the next `stage_spawned` (or at any stage boundary with a clean tree and no spawn in flight — never while a `bmad-build-auto` / QA / code-review agent is running). The install commit lands on the epic branch (a chore commit under SC-3; it reaches the feature branch at the SC-4 merge). On the next `/epic-cycle` invocation resume does the rest: committed stories are skipped; sprint planning re-runs, so `ledger_load` runs; a story at `cr_complete` without `ledger_adjudicated` resumes at adjudication; an epic whose last story is committed but has no `ledger_burndown_*` entry runs the burn-down gate before `epic_status_done`.
 - **Ledger migration is not optional mid-epic.** `ledger_load` halts on a legacy-grammar ledger, so the Step 1 migration must be part of the upgrade commit. Migrated entries are triaged by class at migration (human-owned and product calls → `decision-pending`, story-closable → `routed owner=burndown`, non-two-way-door LOWs → `wontfix-accepted`); this epic's burn-down gate is therefore the first real drain of the story-closable backlog and may charter a burn-down story (bounded by `burndown_story_max`), and this epic's SC-4 decision sheet is the first time the `decision-pending` entries reach the user — budget for both.
+- **Upgrading to ≥ 2026-10-19.3 (the CI gate's final review).** Same timing as 2026-10-19.2 below; re-installing replaces `ci-gate.py`. It now carries each `paths`-filtered workflow's own latest run, never a whole earlier verdict. For 300 seconds after a push, and whenever GitHub's decision cannot be known, it waits instead of carrying. It reads every kind of GitHub push activity, a branch's first push and force pushes included. A run that began without CI (`ci=none`) re-checks at each epic's start and after a push that changes `.github/workflows/` (`ci_mode_changed`). The merge gate's pushed-head check runs in every affected repository. Nothing to migrate.
 - **Upgrading to ≥ 2026-10-19.2 (CI with several workflows; field report 2026-10-19).** Sequential runs: safe at a story boundary, attended or during an unattended hold — never under a live run. An orchestrator run follows the parallel kit's rule: never while one is in flight, held epics included. The CI gate used to read one run per commit (`gh run list … -L 1`), so a project with two workflows per push could pass the gate while the other was still running or red. It now reads every workflow a push starts, through `_bmad/scripts/ci-gate.py` (File 10; it needs `uv` and `gh`, as before). Log entries change shape: `committed … runs=<ids>`, `ci_resolved … sha= runs=`, `ci_green_verified runs=`, `merge_gate_blocked … runs=`. An entry written before the upgrade carries `run=<id>`; resolve an open `ci=pending` by its commit with `CI status`, since its single run may be one of several. Re-read the last resolved commit with `CI status` too: a red there predates the next story, so it is inherited, not the next story's. Nothing to migrate. With `ci=gh`, check that `ci-gate.py expected --branch <an epic branch>` lists the workflows you expect. A workflow it marks `required` that never runs on that branch would hold the gate at `pending`: list it under `optional:` in `_bmad/custom/ci-gate.yaml` (project-owned), and report the trigger the script misread.
 - **Upgrading to ≥ 2026-10-19.1 (`--unattended` and `--review`).** Attended runs are unchanged: the doctrine (`_bmad/custom/epic-cycle-unattended.md`) is read only under the new flags. The install writes `_bmad/custom/unattended.yaml` from its template when absent — **review it with the user before the first unattended run**: `owner_only` (what always waits for them), `veto_window` (what the loop decides and reports), `hard_stops`, `milestones` (which define "the release"), `product_defaults`, `owner_fixed` and `stage_preamble` are the project's to set. `.gitignore` gains `_bmad-output/unattended/`. Never upgrade under a live unattended run (Step 1 check 7): hold it first (`bash _bmad/scripts/unattended-inbox.sh <state> hold "upgrade"`, where `<state>` is `_bmad-output/unattended` or, for a parallel run, `<worktree_base>/.coordination/unattended`), wait until the run logs `hold_complete` and `run-status` prints `none`, upgrade, then re-invoke the same command to resume — the resume clears the hold.
 - **Upgrading to ≥ 2026-10-18.1 (the adversarial review of the kit).** Safe at a story boundary; the orchestrator rule below still applies. (1) `ledger.sh` is replaced: drop any local patch to it — this version validates owners correctly on large trackers and non-ASCII keys, stores backslashes verbatim, reads effective state by timestamp, and breaks a crashed claim's counter lock. (2) An entry an earlier run parked on a not-yet-existing X.0 key (`owner=<N>-0-…` written with `LEDGER_OWNER_CHECK=off`) reads `UNKNOWN` at `ledger_load`: re-own it `owner=burndown note=to_x0:<what to decide>`. (3) The pre-flight now compares the resolver's artifact paths with `_bmad/bmm/config.yaml` and halts on a mismatch — align them before the next run. (4) A user-level v7 preview needs `v7_global_accepted:` in `kit-versions.yaml` (re-run Step 1 to record it), or the pre-flight halts. (5) A project whose CI is not GitHub Actions now reads `ci=unavailable` (the merge gate asks you to confirm CI) instead of `ci=none`. (6) Sequential merges now commit their merge record on the feature branch (`chore(epic-N): record merge`); an epic merged under an earlier version with an uncommitted `epic_merged_to_feature` line should have that line committed on the feature branch now.
