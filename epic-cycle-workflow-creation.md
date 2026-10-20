@@ -1,6 +1,6 @@
 # Epic Cycle Workflow — Installation Kit
 
-**Kit-Version:** 2026-10-19.1
+**Kit-Version:** 2026-10-19.2
 
 **Requires BMAD Method 6.11.0–6.12.x, not v7** (`_bmad/_config/manifest.yaml` → `installation.version`; 6.12.2 recommended — its helper scripts write UTF-8 on Windows). BMAD v7, which the 6.12.2 installer advertises as a preview, replaces what this kit drives; Step 1 and the command's pre-flight refuse it. This kit drives the v6.11 Phase-4 chain — `bmad-sprint-planning → bmad-build-auto → bmad-code-review` — and its rendered skills need `uv` (Python 3.11+ provisioned by uv) on PATH. For BMAD ≤ 6.10 projects use the last pre-6.11 kit release; do not install this kit there.
 
@@ -19,6 +19,7 @@ A self-contained kit for installing the `/epic-cycle` slash command and its BMAD
 | `_bmad/custom/epic-cycle-unattended.md` | Doctrine for `/epic-cycle --unattended` and `--review`, read only under those flags (kit-owned; overwritten on re-install) |
 | `_bmad/custom/unattended.yaml` | The unattended policy: what the loop may decide, what it parks for the owner, what stops it — project-owned, written from the template only when absent, never overwritten |
 | `_bmad/scripts/unattended-inbox.sh` | The owner's inbox for unattended runs (bash + awk): an append-only journal, the rendered `inbox.md`, the run lock, hold requests |
+| `_bmad/scripts/ci-gate.py` | The CI gate (Python, run with `uv` like BMAD's own scripts): every GitHub Actions workflow a push starts, judged for one commit |
 | `.gitignore` | Gains `_bmad-output/unattended/` — the run state directory (inbox, run lock, resume prompts) stays out of git |
 | `.gitattributes` | Gains `_bmad/scripts/*.sh text eol=lf` — the kit's bash scripts stay LF in every checkout and worktree |
 | `.claude/commands/epic-cycle.md` | The slash command body (self-contained at runtime) |
@@ -801,6 +802,7 @@ Names used below:
 - **the policy** — `_bmad/custom/unattended.yaml` (project-owned; its categories are data). **This doctrine** — `_bmad/custom/epic-cycle-unattended.md`. In orchestrator mode both are read from the MAIN checkout (absolute paths), never from a worktree's copy.
 - **`<state>`** — the run state directory, outside git's view: `_bmad-output/unattended/` (sequential; gitignored by the kit) or `<worktree_base>/.coordination/unattended/` (orchestrator mode). Always an absolute path in commands and prompts.
 - **`INBOX`** — `bash _bmad/scripts/unattended-inbox.sh <state>`.
+- **`CI`** — `uv run --no-cache _bmad/scripts/ci-gate.py` (the command's "CI Is a Gate"): `CI status --branch <branch> --sha <sha>` judges every workflow a push started; act on its first line's `result=` (`success`, `failure`, `cancelled`, `pending`, `untriggered`, `none`, `unavailable` — the command's "Reading the result"), never on the exit code alone.
 - **`SRC`** — the pathspec for a story's source changes: `. ':(exclude)<impl>' ':(exclude)<planning>' ':(exclude)_bmad-output' ':(exclude)_bmad' ':(exclude).claude' ':(exclude,glob)**/.gitignore' ':(exclude,glob)**/.gitattributes'` (with the resolved `<impl>` and `<planning>`). Bookkeeping, planning artifacts, the spine, the kit's files and every ignore or attribute file — nested ones included, so outputs a story ignores stay ignored — are never part of a set-aside or a hold patch.
 - **`DIFF`** — `git diff --binary --no-color --no-ext-diff --src-prefix=a/ --dst-prefix=b/`: a patch whatever the user's git config says (`color.ui=always`, `diff.noprefix` or an external diff tool would otherwise make it unappliable). **`APPLY`** — `git apply --whitespace=nowarn`: a patch applied byte for byte whatever `apply.whitespace` says (`fix` would rewrite trailing blanks, `error` would refuse them).
 - **`<patches>`** — `<state>/patches/epic-<N>/`: hold patches, a story's uncommitted work saved over a hold and applied again on resume. **`<evidence>`** — `<state>/evidence/epic-<N>/`: a dead stage's tree, kept for the owner and never applied. Both hold unreviewed output, so they live outside git and are never pushed; set-aside patches, which hold a story's code, are committed under `<impl>/set-aside/`.
@@ -823,7 +825,7 @@ Names used below:
    - The policy exists and parses: `uv run --no-cache --no-project --with pyyaml python -c "import sys, yaml; d = yaml.safe_load(open(sys.argv[1])); print(sorted(d))" _bmad/custom/unattended.yaml` lists at least `gates`, `hard_stops`, `limits`, `owner_only`, `veto_window`. (`--no-project`: never let uv resolve or lock the project's own Python dependencies.)
    - **Permission mode:** ask the owner to confirm the session runs in `bypassPermissions` (or `auto`) mode — the agent cannot reliably detect it, and one permission prompt stalls the loop. Log `permission_mode_attested mode=<…>`. Asked at every interactive launch; a relaunch reuses this run's logged attestation (its command line carries the mode).
    - **Session type:** an interactive session (terminal, IDE, desktop), or a relaunch under `claude -p`. A `claude -p` parallel run needs `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0`.
-   - **CI mode.** If the pre-flight found `ci=none` or `ci=unavailable` and the policy's `ci.without_ci` is empty, ask the owner: `local_green` (merge on the full suite plus the smoke) or `hold` (merges wait; a sequential run then ends at the first epic close). Log `ci_mode_chosen without_ci=<…>`.
+   - **CI mode.** If the pre-flight found `ci=none` or `ci=unavailable`, or the first epic's CI check found no workflow on a push to its branch (`no_push_trigger`), and the policy's `ci.without_ci` is empty, ask the owner: `local_green` (merge on the full suite plus the smoke) or `hold` (merges wait; a sequential run then ends at the first epic close). Log `ci_mode_chosen without_ci=<…>`.
    - **Repository visibility:** `gh repo view --json visibility -q .visibility` (or ask); log it. On a public repository, pushing the epic branch is routine; a secret in anything pushed is a security incident (U3).
    - **Push notifications:** check whether a push-notification tool is available to this session (Claude Code's `PushNotification`, loaded with `ToolSearch` if deferred). If not, log `notify_unavailable` — the inbox alone carries the items.
    - **The run lock:** `INBOX run-status`. `none` → continue. A lock (exit 3) names a run id, holder and heartbeat age:
@@ -886,7 +888,7 @@ A story parked **before** implement (at plan or spec validation) has no code: lo
 
 Each row overrides the command passage it names.
 
-**Waiting** — for CI, a rerun, or a queued run — is a bounded poll in one foreground call that ends inside the 10-minute cap, repeated while the run is still going: `for i in 1 2 3 4 5 6 7 8; do s="$(gh run view <id> --json status -q .status)"; [ "$s" = completed ] && break; sleep 60; done` (`gh run watch` blocks until the run ends, so it can outlive the cap). Never `Monitor`: the lead's turn never ends with something in flight. (The orchestrator keeps waiting on runner notifications, as today.)
+**Waiting** — for CI, a rerun, or a queued run — is a bounded poll in one foreground call that ends inside the 10-minute cap, repeated while the run is still going: `for i in 1 2 3 4 5 6 7 8; do out="$(uv run --no-cache _bmad/scripts/ci-gate.py status --branch <branch> --sha <sha>)"; [ $? -eq 12 ] || break; sleep 60; done; printf '%s\n' "$out" | head -1` (exit 12 is `pending`; then act on the printed `result=`) (`gh run watch` follows one run and blocks until it ends, so it can outlive the cap). Never `Monitor`: the lead's turn never ends with something in flight. (The orchestrator keeps waiting on runner notifications, as today.)
 
 **Stage results**
 - **`## Clarification Needed`** from a stage, or a build-auto clarification HALT (Clarification protocol, Handling Clarifications): classify (U3). Decide or veto → write the ruling into the spec (`## Design Notes`, committed — Rule 16) and re-spawn through the re-dispatch protocol; owner-only → park. At most `limits.clarification_rounds` rounds per stage per story; then stop the story. Pipeline or environment defects (dirty tree, no subagents, a failed pre-warm) are fixed, never "answered".
@@ -907,9 +909,9 @@ Each row overrides the command passage it names.
 **CI** ("CI Is a Gate")
 - **Red on the story just committed:** the rework path. Unfixable within the cap → stop the story and set it aside (U4).
 - **Red matching a ledgered flake:** one rerun and an `occurrence=` bump; green continues, red takes the rework path.
-- **Infrastructure reds:** re-run the workflow (`gh run rerun <id>`) and watch it — the run's own duration paces the retries. Three infrastructure reds in a row, or a run still queued past `ci.queue_minutes` (counted from the push's log entry), → the CI outage rule: resolution point 1 is relaxed for at most `limits.unverified_stories` story — its successor may be committed locally, unpushed. When CI returns, push the stacked heads one at a time, oldest first, resolving each before the next push, so a red is charged to the right story. Blocked past `ci.blocked_hours` → stop the epic. (A red on a story with a stacked successor stops the epic — U4 never sets it aside.)
+- **Infrastructure reds:** re-run each red run `CI status` lists (`gh run rerun <id> --failed`) and watch them — the runs' own duration paces the retries. Three infrastructure reds in a row, or a run still queued — or a required workflow still without a run (`missing=`), or CI unreadable (`result=unavailable`) — past `ci.queue_minutes` (counted from the push's log entry), → the CI outage rule: resolution point 1 is relaxed for at most `limits.unverified_stories` story — its successor may be committed locally, unpushed. When CI returns, push the stacked heads one at a time, oldest first, resolving each before the next push, so a red is charged to the right story. Blocked past `ci.blocked_hours` → stop the epic. (A red on a story with a stacked successor stops the epic — U4 never sets it aside.)
 - **Inherited red:** rerun once. Then one fix-forward story per root cause (keyed by the first red sha, `limits.fix_forward_per_cause`), only if the failing code lies in this epic's own changes (`git diff --name-only <feature>...HEAD`); it is a veto item. Otherwise, or after that, stop the epic.
-- **CI unavailable at the merge gate** (SC-4's "ask the user to confirm CI by hand"): as chosen at launch — merge on local green, or hold the merge.
+- **CI unavailable at the merge gate** (SC-4's "ask the user to confirm CI by hand"), for an epic without readable CI (`ci=unavailable`, or `no_push_trigger`): as chosen at launch — merge on local green, or hold the merge. A `ci=gh` epic whose CI cannot be read is an outage: the CI outage rule, never a merge on local green.
 
 **Epic start and close** — U8 and U9, including X.0's "batched to the user in one sitting", the decision sheet, SC-4's merge question and "Resume across the end-of-epic gates" ("re-asking … is correct") — none of them asks.
 
@@ -958,7 +960,7 @@ Sequentially, the next epic starts only after the previous one merged (otherwise
 - **Retrospective:** `/bmad-retrospective -H <epic>` via the `Skill` tool, lead-side (`gates.retrospective: headless`; `skip` → log `epic_retro_skipped reason=policy`) — sequential: where the command runs it; orchestrator mode: by the runner, after its burn-down gate and before its integrate-forward (U14). Headless, it writes the retrospective document (`headless: true` in its frontmatter, an Assumptions section, an acceptance verdict), marks the retro key `done` (meaning "the retrospective ran"), and appends its proposed action items as `open`; it does not change earlier action items' status. Commit its outputs (bookkeeping). Read `verdict` from the document's frontmatter: `rejected` holds the merge (`INBOX add held-merge …`); `accepted` and `accepted-with-open-items` continue. Add `INBOX add retro "Epic <N>" "<verdict; n findings; new action items>" …` so the owner can drop items through `--review`. Log `epic_retro_complete mode=headless verdict=<…>`.
 - **Decision sheet** (Rule 17 (5)): classify each `escalated` / `decision-pending` entry (U3). Owner-only → `INBOX add parked "DW-<n>" …` and the trailer `status=decision-pending owner=burndown by=unattended note=inbox=<U-id>`; the decision sheet, the burn-down gate and X.0 skip entries whose latest note is `inbox=…`. Veto → decided with `by=unattended` plus a veto item. The rest → decided `by=unattended`. Human-only entries (`note=human=`) move to `action_items` as today. Log `decision_sheet_recorded … by=unattended`.
 - **Merge to the feature branch** (`gates.merge_to_feature: when_green`; SC-4 asks nothing). All must hold: every story `done`, none parked or set aside (a dropped story — `story_dropped`, U10 — is closed); the burn-down gate logged; a verdict that is not `rejected` (or the retrospective skipped by policy); the decision sheet recorded; fewer than `limits.veto_open_max` open veto items. Then:
-  1. **Integrate forward first** if `origin/<feature>` is not an ancestor of the epic head: merge it into the epic branch; resolve conflicts per `gates.merge_conflicts` (`resolve`: plain unions — both sides kept, no behaviour choice — are decided; behaviour choices are ruled as veto items; code an AD governs goes through U7; an `owner_only` match parks; an unclassifiable conflict holds the merge. `ask`: any conflict holds the merge). Run the full suite and the smoke on the merged tree, push, and require CI green on that exact head.
+  1. **Integrate forward first** if `origin/<feature>` is not an ancestor of the epic head: merge it into the epic branch; resolve conflicts per `gates.merge_conflicts` (`resolve`: plain unions — both sides kept, no behaviour choice — are decided; behaviour choices are ruled as veto items; code an AD governs goes through U7; an `owner_only` match parks; an unclassifiable conflict holds the merge. `ask`: any conflict holds the merge). Run the full suite and the smoke on the merged tree, push, and require CI green on that exact head (`CI status`: every workflow).
   2. **Merge** (SC-4, now conflict-free): the `epic_merge_started` marker, the merge, the push, the branch deletes, verification on origin, the record commit — which also carries a copy of `inbox.md` as `<impl>/unattended-inbox-snapshot.md`, so the owner's decisions live in git.
   3. **Resolve CI for the new feature head.** Flake or infrastructure → retried. A story red → no new epic starts: a sequential run ends with its report.
 
@@ -985,7 +987,7 @@ Sequentially, the next epic starts only after the previous one merged (otherwise
 5. Verify every reported sha on origin; list local-only shas as such.
 6. `INBOX add hold …`; push notification; `INBOX run-end <run-id> <token> hold`; end. (Orchestrator mode: after every runner has ended — U14.)
 
-**The resume prompt is kept current.** At every story boundary the lead rewrites `<state>/resume/epic-<N>.md` from the log, so a session that dies without warning (a hard usage limit, a crash) leaves a current one. It contains: the role and invocation (`/epic-cycle <range> --unattended`, the run id, both hashes); the owner-fixed values; the git-verified state (branch, origin and local heads, each unpushed commit and what it holds, spec status, the ledger load, parked and set-aside stories); every runtime target in use (dev and throwaway), what is loaded there, and which run started it; the project's `stage_preamble`; "First, check the CI result for the last pushed `headSha`"; the next steps in order; and how to end. It never depends on chat history. The main session also records the run's heartbeat (see the resume semantics below).
+**The resume prompt is kept current.** At every story boundary the lead rewrites `<state>/resume/epic-<N>.md` from the log, so a session that dies without warning (a hard usage limit, a crash) leaves a current one. It contains: the role and invocation (`/epic-cycle <range> --unattended`, the run id, both hashes); the owner-fixed values; the git-verified state (branch, origin and local heads, each unpushed commit and what it holds, spec status, the ledger load, parked and set-aside stories); every runtime target in use (dev and throwaway), what is loaded there, and which run started it; the project's `stage_preamble`; "First, check CI (`CI status`) for the last pushed commit"; the next steps in order; and how to end. It never depends on chat history. The main session also records the run's heartbeat (see the resume semantics below).
 
 **Unattended resume semantics** (override Resume Semantics under the flag):
 - Re-invoking the same command resumes. On a **relaunch, nothing asks**: re-run the pre-flight and U2's automatic checks; take every owner answer this run already logged from the log (`permission_mode_attested`, `ci_mode_chosen`, a lead-model acceptance); the telemetry gate logs and continues; a check that would need a new answer stops the run with its report. An interactive re-invocation may ask U2's launch questions again.
@@ -1406,6 +1408,550 @@ case "$CMD" in
 esac
 ```
 
+### File 10: `_bmad/scripts/ci-gate.py` (verbatim)
+
+The CI gate the command calls `CI` (`uv run --no-cache _bmad/scripts/ci-gate.py`; its inline `# /// script` header names its one dependency, `ruamel.yaml`, the one BMAD's own `sprint_plan.py` uses). A push can start several workflows, and the gate is every one of them. The script reads the workflow files at the pushed commit and works out which ones a push to the branch starts: GitHub's branch filters decide, and a `paths` filter is judged against the commit's own changes. It then lists every push run for that commit through `gh`, takes each workflow's latest run, and gives one verdict. A workflow still running, red, or never started is never missed the way a single `gh run list … -L 1` misses it (field report 2026-10-19).
+
+```python
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["ruamel.yaml>=0.18,<0.20"]
+# ///
+"""The /epic-cycle CI gate: is every GitHub Actions workflow a push starts green on one commit?
+
+Run it from the repository or a worktree of it, any directory. It reads the workflow files AT the commit, not the tree,
+and asks GitHub about the repository `origin` names (or GH_REPO, [HOST/]OWNER/REPO):
+  uv run --no-cache _bmad/scripts/ci-gate.py expected --branch <branch> [--sha <sha>]
+  uv run --no-cache _bmad/scripts/ci-gate.py status --branch <branch> --sha <sha>
+  uv run --no-cache _bmad/scripts/ci-gate.py selftest
+
+expected  the workflows a push of <sha> (default HEAD) to <branch> starts, judged on the commit's own changes: one line
+          per workflow, path TAB required|conditional|optional TAB name. `required`: its branch filter matches and any
+          paths filter matches the changes. `conditional`: a paths filter they do not match (or that cannot be judged),
+          so GitHub may skip it. `optional`: listed in _bmad/custom/ci-gate.yaml (below).
+status    judges the push that carried <sha>, as GitHub does: the push's whole range decides a paths filter (GitHub's
+          push activity names it), and a commit pushed beneath others is judged by that push's head. It lists every
+          push run for the judged commit, takes each workflow's latest, and adds each required workflow with no run
+          yet. A push that started no workflow (it changed nothing a paths filter watches) carries the verdict of the
+          last push before it that ran CI. First line, always:
+            result=<success|failure|cancelled|pending|untriggered|none|unavailable> sha=<asked> branch= runs=<id,...|none> missing=<path,...|none> via=<sha|none>
+          `via=` names the commit the verdict comes from when it is not <sha>. Then one line per workflow:
+          path TAB required|conditional|optional|extra TAB run id|- TAB status TAB conclusion|- TAB url|-
+          (`extra`: a workflow the files did not predict but GitHub ran; its result counts all the same).
+Results and exit codes (act on the `result=` line; uv and Python have exit codes of their own):
+  success 0      every run green (`skipped`, `neutral` count as green)
+  failure 10     a run concluded failure, timed_out, startup_failure, action_required or stale; it outranks the rest
+  cancelled 11   a run was cancelled (and none is red)
+  pending 12     a run is queued or running, or a required workflow has no run yet
+  none 13        no active workflow runs on a push to this branch at all
+  unavailable 14 gh missing or unauthenticated, an API or network error, a CI-skip token in the commit message, a
+                 broken _bmad/custom/ci-gate.yaml, or any other failure of this script
+  untriggered 15 workflows exist, but no push up to this commit ever started one (each changed nothing they watch)
+_bmad/custom/ci-gate.yaml (optional, project-owned): `optional: [.github/workflows/<file>, ...]` - workflows the gate
+never waits for (a finished run of one still counts). CI_GATE_GH names a gh-compatible executable (default `gh`).
+"""
+import json
+import os
+import re
+import subprocess
+import sys
+import urllib.parse
+
+from ruamel.yaml import YAML
+from ruamel.yaml.error import YAMLError
+
+GH = os.environ.get("CI_GATE_GH", "gh")
+GREEN = {"success", "skipped", "neutral"}
+CANCELLED = {"cancelled"}
+EXIT = {"success": 0, "failure": 10, "cancelled": 11, "pending": 12, "none": 13, "unavailable": 14, "untriggered": 15}
+SKIP = re.compile(r"\[(skip ci|ci skip|no ci|skip actions|actions skip)\]|^skip-checks: ?true\s*$", re.I | re.M)
+CONFIG = "_bmad/custom/ci-gate.yaml"
+ZERO = "0" * 40
+DIFF_LIMIT = 300  # GitHub judges a paths filter on at most 300 changed files; beyond that it may skip the workflow
+WORKFLOW_FILE = re.compile(r"\.github/workflows/[^/]+\.ya?ml")
+
+
+class Unavailable(Exception):
+    pass
+
+
+def run(cmd):
+    env = {**os.environ, "GH_PROMPT_DISABLED": "1", "GIT_TERMINAL_PROMPT": "0"}
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=90, env=env)
+    except FileNotFoundError:
+        raise Unavailable(f"{cmd[0]} not found")
+    except subprocess.TimeoutExpired:
+        raise Unavailable(f"{' '.join(cmd[:3])}: no answer within 90 s")
+    if p.returncode != 0:
+        raise Unavailable(f"{' '.join(cmd[:3])}: {(p.stderr or p.stdout).strip()[:300]}")
+    return p.stdout
+
+
+def is_ancestor(a, b):
+    try:
+        return subprocess.run(["git", "merge-base", "--is-ancestor", a, b], capture_output=True, timeout=90).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def load_yaml(text):
+    return YAML(typ="base", pure=True).load(text)  # every scalar stays a string: branch 1.10 is "1.10", not 1.1
+
+
+# ---- GitHub's filter patterns (branches, branches-ignore, paths, paths-ignore) -----------------------------
+def pattern_re(pat):
+    """`*` any run without `/`; `**` any run; `**/` zero or more directories; `?` / `+` zero-or-one / one-or-more of
+    the preceding character; `[...]` a character class; `\\` escapes the next character. ValueError if invalid."""
+    out, i = [], 0
+    def quantifiable():
+        return out and out[-1] not in ("?", "+") and not out[-1].endswith(("*", ")?"))
+    while i < len(pat):
+        c = pat[i]
+        if c == "\\" and i + 1 < len(pat):
+            out.append(re.escape(pat[i + 1])); i += 2
+        elif pat.startswith("**/", i):
+            out.append("(?:.*/)?"); i += 3
+        elif pat.startswith("**", i):
+            out.append(".*"); i += 2
+        elif c == "*":
+            out.append("[^/]*"); i += 1
+        elif c in "?+" and quantifiable():
+            out.append(c); i += 1
+        elif c == "[" and pat.find("]", i + 1) > i + 1:
+            j = pat.find("]", i + 1); out.append("[" + pat[i + 1:j].replace("\\", "\\\\") + "]"); i = j + 1
+        else:
+            out.append(re.escape(c)); i += 1
+    try:
+        return re.compile("".join(out) + r"\Z")
+    except re.error as e:
+        raise ValueError(f"invalid filter pattern {pat!r} ({e})")
+
+
+def matches(name, patterns):
+    """GitHub's order rule: a later `!pattern` excludes what earlier patterns matched; a later pattern re-includes."""
+    hit = False
+    for p in patterns:
+        if p.startswith("!"):
+            if pattern_re(p[1:]).match(name):
+                hit = False
+        elif pattern_re(p).match(name):
+            hit = True
+    return hit
+
+
+# ---- which workflows a push starts ----------------------------------------------------------------------
+def on_block(doc):
+    if not isinstance(doc, dict):
+        return None
+    for key in ("on", True):  # a YAML 1.1 reader would turn the key `on` into True
+        if key in doc:
+            return doc[key]
+    return None
+
+
+def as_list(v):
+    if v is None or v == "":
+        return []
+    return [str(x) for x in v] if isinstance(v, list) else [str(v)]
+
+
+def push_trigger(doc, branch, files):
+    """`required`, `conditional` or None (a push to `branch` never starts it). `files`: the push's changed paths, or
+    None when they cannot be judged (a new branch, a root commit, more than 300 files). ValueError on a bad pattern."""
+    on = on_block(doc)
+    if isinstance(on, str):
+        on = {on: None}
+    elif isinstance(on, list):
+        on = {str(e): None for e in on}
+    if not isinstance(on, dict) or "push" not in on:
+        return None
+    cfg = on["push"]
+    if not isinstance(cfg, dict):
+        return "required"  # `push:` with no filter: every branch
+    has_branches = "branches" in cfg or "branches-ignore" in cfg
+    if ("tags" in cfg or "tags-ignore" in cfg) and not has_branches:
+        return None  # tag pushes only
+    if "branches" in cfg and not matches(branch, as_list(cfg["branches"])):
+        return None
+    if "branches-ignore" in cfg and matches(branch, as_list(cfg["branches-ignore"])):
+        return None
+    if "paths" in cfg or "paths-ignore" in cfg:
+        if not files:
+            return "conditional"
+        if "paths" in cfg:
+            hit = any(matches(f, as_list(cfg["paths"])) for f in files)
+        else:
+            hit = not all(matches(f, as_list(cfg["paths-ignore"])) for f in files)
+        return "required" if hit else "conditional"
+    return "required"
+
+
+def diff_files(a, b):
+    """Paths changed between two commits (plumbing: no diff.relative, no renames); None if not judgeable."""
+    try:
+        out = [f for f in run(["git", "diff-tree", "-r", "--name-only", "-z", "--no-renames", a, b]).split("\0") if f]
+    except Unavailable:
+        return None
+    return out if len(out) <= DIFF_LIMIT else None
+
+
+def commit_files(sha):
+    parents = run(["git", "rev-list", "--parents", "-n", "1", sha]).split()[1:]
+    return diff_files(parents[0], sha) if parents else None
+
+
+def optional_paths():
+    top = run(["git", "rev-parse", "--show-toplevel"]).strip()
+    path = os.path.join(top, CONFIG)
+    if not os.path.exists(path):
+        return set()
+    try:
+        with open(path, encoding="utf-8") as f:
+            doc = load_yaml(f.read())
+    except (YAMLError, OSError, UnicodeDecodeError) as e:
+        raise Unavailable(f"{CONFIG} is unreadable: {str(e).splitlines()[0] if str(e) else type(e).__name__}")
+    items = doc.get("optional") if isinstance(doc, dict) else None
+    good = set()
+    for x in (items if isinstance(items, list) else [] if items in (None, "") else [items]):
+        if isinstance(x, str) and WORKFLOW_FILE.fullmatch(x):
+            good.add(x)
+        else:
+            print(f"WARNING: {CONFIG}: optional entry {x!r} is not a .github/workflows/<file>.yml path; ignored", file=sys.stderr)
+    return good
+
+
+def expected(branch, sha, optional, files):
+    """[(path, kind, name)] for the workflow files at `sha` (top level of .github/workflows only, as GitHub reads)."""
+    listing = run(["git", "ls-tree", "--full-tree", "-z", "--name-only", sha, "--", ".github/workflows/"])
+    out = []
+    for p in sorted(x for x in listing.split("\0") if WORKFLOW_FILE.fullmatch(x)):
+        try:
+            doc = load_yaml(run(["git", "show", f"{sha}:{p}"]))
+            kind = push_trigger(doc, branch, files)
+        except YAMLError:
+            kind, doc = "required", {"name": "(unparsed: GitHub reports a broken workflow as a failed run)"}
+        except ValueError as e:
+            kind, doc = "required", {"name": f"({e}: GitHub reports the workflow as failed)"}
+        if kind:
+            name = doc.get("name") if isinstance(doc, dict) else None
+            out.append((p, "optional" if p in optional else kind, str(name) if name else p))
+    return out
+
+
+# ---- the verdict ----------------------------------------------------------------------------------------
+def verdict(exp, states, runs, sha):
+    """exp: [(path, kind, name)]; states: {path: workflow state}; runs: [dict with "path"]. Returns (result, rows)."""
+    kinds = {p: k for p, k, _ in exp}
+    latest = {}
+    for r in runs:
+        if r.get("headSha") != sha:
+            continue
+        cur = latest.get(r["path"])
+        if cur is None or (r.get("createdAt") or "", r.get("databaseId") or 0) > (cur.get("createdAt") or "", cur.get("databaseId") or 0):
+            latest[r["path"]] = r
+    rows = [(p, kinds.get(p, "extra"), r) for p, r in latest.items()]
+    rows += [(p, k, None) for p, k, _ in exp
+             if p not in latest and k == "required" and states.get(p, "active") == "active"]
+    rows.sort(key=lambda row: row[0])
+    done = [r for _, _, r in rows if r and r.get("status") == "completed"]
+    if any((r.get("conclusion") or "") not in GREEN | CANCELLED for r in done):
+        return "failure", rows
+    if any(r.get("conclusion") in CANCELLED for r in done):
+        return "cancelled", rows
+    if any(r is None or (r.get("status") != "completed" and k != "optional") for _, k, r in rows):
+        return "pending", rows
+    if rows:
+        return "success", rows
+    live = [p for p, _, _ in exp if states.get(p, "active") == "active"]
+    return ("none" if not live else "untriggered"), rows
+
+
+# ---- the repository and its pushes ---------------------------------------------------------------------
+def mask(url):
+    return re.sub(r"//[^/@]+@", "//***@", url)
+
+
+def ssh_hostname(alias):
+    try:
+        for line in run(["ssh", "-G", alias]).splitlines():  # resolves ~/.ssh/config aliases; never connects
+            if line.startswith("hostname "):
+                return line.split(None, 1)[1].strip().lower()
+    except Unavailable:
+        pass
+    return alias
+
+
+def parse_remote(url, resolve=None):
+    m = re.match(r"^(?:([a-z][a-z0-9+.-]*)://)?(?:[^@/]+@)?([^/:]+)(?::\d+)?[:/]+([^/]+)/([^/]+?)(?:\.git)?/?$", url.strip(), re.I)
+    if not m:
+        raise Unavailable(f"origin ({mask(url)}) is not a GitHub repository URL")
+    scheme, host, owner, name = m.groups()
+    host = host.lower()
+    if (scheme or "ssh").lower() not in ("http", "https", "git") and resolve:
+        host = resolve(host)
+    if host == "ssh.github.com":  # GitHub's SSH-over-443 host; the API lives on github.com
+        host = "github.com"
+    return host, owner, name
+
+
+def repo():
+    """(host, owner, name) of GH_REPO, else of `origin` - never gh's own pick, which prefers a remote named upstream."""
+    spec = os.environ.get("GH_REPO", "")
+    if spec:
+        parts = spec.strip("/").split("/")
+        if len(parts) in (2, 3):
+            return (parts[0].lower() if len(parts) == 3 else "github.com"), parts[-2], parts[-1]
+        raise Unavailable(f"GH_REPO={spec} is not [HOST/]OWNER/REPO")
+    return parse_remote(run(["git", "remote", "get-url", "origin"]), ssh_hostname)
+
+
+class Ctx:
+    def __init__(self, branch):
+        self.branch = branch
+        self.optional = optional_paths()
+        self.host, self.owner, self.name = repo()
+        self.paths, self.states = {}, {}
+        for line in self.gh_api(f"repos/{self.owner}/{self.name}/actions/workflows", "--paginate",
+                                "--jq", ".workflows[] | [.id, .path, .state] | @tsv").splitlines():
+            f = line.split("\t")
+            if len(f) >= 3 and f[0].isdigit():
+                self.paths[int(f[0])] = f[1]; self.states[f[1]] = f[2]
+        self._pushes = False
+
+    def gh_api(self, endpoint, *args):
+        return run([GH, "api", "--hostname", self.host, *args, endpoint])
+
+    def pushes(self):
+        """[(before, after)] of every push to the branch, newest first; None if GitHub's activity cannot be read."""
+        if self._pushes is False:
+            ref = urllib.parse.quote(f"refs/heads/{self.branch}", safe="")
+            try:
+                out = self.gh_api(f"repos/{self.owner}/{self.name}/activity?ref={ref}&activity_type=push&per_page=100",
+                                  "--paginate", "--jq", ".[] | [.before, .after] | @tsv")
+                self._pushes = [tuple(l.split("\t")[:2]) for l in out.splitlines() if l.count("\t") >= 1]
+            except Unavailable:
+                self._pushes = None
+        return self._pushes
+
+    def push_of(self, sha):
+        plist = self.pushes() or []
+        for before, after in plist:
+            if after == sha:
+                return before, after
+        for before, after in reversed(plist):  # oldest first: the push that carried it beneath its head
+            if is_ancestor(sha, after) and (before == ZERO or not is_ancestor(sha, before)):
+                return before, after
+        return None
+
+    def runs(self, sha):
+        try:
+            runs = json.loads(run([GH, "run", "list", "-R", f"{self.host}/{self.owner}/{self.name}", "--branch", self.branch,
+                                   "--commit", sha, "--event", "push", "-L", "200", "--json",
+                                   "databaseId,workflowDatabaseId,workflowName,status,conclusion,headSha,createdAt,url"]) or "[]")
+        except ValueError:
+            raise Unavailable("gh run list did not return JSON")
+        if not isinstance(runs, list) or not all(isinstance(r, dict) for r in runs):
+            raise Unavailable("gh run list returned an unexpected shape")
+        for r in runs:
+            wid = r.get("workflowDatabaseId")
+            if wid not in self.paths:  # a workflow the listing did not carry yet (just added); never guess its file
+                try:
+                    self.paths[wid] = json.loads(self.gh_api(f"repos/{self.owner}/{self.name}/actions/workflows/{wid}")).get("path")
+                except ValueError:
+                    raise Unavailable(f"workflow {wid}: unreadable answer")
+            r["path"] = self.paths.get(wid) or f"workflow-id:{wid}"
+        return runs
+
+    def last_ran_before(self, sha):
+        """Fallback without push activity: the nearest earlier commit on the branch that has push runs."""
+        try:
+            heads = {r.get("headSha") for r in json.loads(run([GH, "run", "list", "-R", f"{self.host}/{self.owner}/{self.name}",
+                                                               "--branch", self.branch, "--event", "push", "-L", "200",
+                                                               "--json", "headSha"]) or "[]")}
+        except ValueError:
+            raise Unavailable("gh run list did not return JSON")
+        if not run(["git", "rev-list", "--parents", "-n", "1", sha]).split()[1:]:
+            return None  # a root commit: nothing before it
+        for c in run(["git", "rev-list", "--first-parent", "-n", "200", f"{sha}^"]).split():
+            if c in heads:
+                return c
+        return None
+
+
+def judge(ctx, sha, depth=0):
+    """(result, rows, judged sha) for the push that carried `sha`."""
+    push = ctx.push_of(sha)
+    if push:
+        before, judged = push
+        files = None if before == ZERO else diff_files(before, judged)
+    else:
+        judged, files = sha, commit_files(sha)  # no push record (yet): the commit's own changes
+    result, rows = verdict(expected(ctx.branch, judged, ctx.optional, files), ctx.states, ctx.runs(judged), judged)
+    if result == "pending" and not any(r for _, _, r in rows):
+        messages = run(["git", "log", "--format=%B", f"{push[0]}..{judged}" if push and push[0] != ZERO else "-1", judged])
+        if SKIP.search(messages):
+            raise Unavailable("a commit message in the push carries a CI-skip token: GitHub starts no push workflow for it; push a commit without one")
+    if result == "untriggered" and depth < 50:
+        prev = push[0] if push and push[0] != ZERO else (None if push else ctx.last_ran_before(judged))
+        if prev:
+            return judge(ctx, prev, depth + 1)
+    return result, rows, judged
+
+
+def report(result, rows, sha, branch, judged):
+    ids = [str(r["databaseId"]) for _, _, r in rows if r]
+    missing = [p for p, _, r in rows if r is None]
+    via = judged if judged != sha else "none"
+    print(f"result={result} sha={sha} branch={branch} runs={','.join(ids) or 'none'} missing={','.join(missing) or 'none'} via={via}")
+    for p, k, r in rows:
+        if r is None:
+            print(f"{p}\t{k}\t-\tnot-started\t-\t-")
+        else:
+            print(f"{p}\t{k}\t{r['databaseId']}\t{r.get('status')}\t{r.get('conclusion') or '-'}\t{r.get('url') or '-'}")
+
+
+# ---- selftest -------------------------------------------------------------------------------------------
+def selftest():
+    bad, n = [], 0
+
+    def check(label, got, want):
+        nonlocal n
+        n += 1
+        if got != want:
+            bad.append(f"{label}: got {got!r}, want {want!r}")
+
+    for pats, name, want in [
+        (["PROJ-epic*"], "PROJ-epic0", True), (["PROJ-epic*"], "PROJ-epic0/x", False), (["**"], "a/b", True),
+        (["feature/**"], "feature/a/b", True), (["feature/*"], "feature/a/b", False), (["main"], "main2", False),
+        (["v[12].*"], "v1.x", True), (["v[12].*"], "v3.x", False), (["ab?c"], "ac", True), (["ab+c"], "abbc", True),
+        (["releases/**", "!releases/**-alpha"], "releases/1-alpha", False), (["releases/**", "!releases/**-alpha"], "releases/1", True),
+        (["*", "!main", "main"], "main", True), (["a\\*b"], "a*b", True), (["a\\*b"], "axb", False),
+        (["**/README.md"], "README.md", True), (["**/README.md"], "docs/x/README.md", True), (["**/*-post.md"], "my-post.md", True),
+        (["**/PROJ-epic*"], "PROJ-epic1", True), (["a*+"], "a+", True), (["a*+"], "ab", False),
+    ]:
+        check(f"matches({pats}, {name})", matches(name, pats), want)
+    try:
+        pattern_re("[z-a]"); check("invalid pattern raises", "no error", "ValueError")
+    except ValueError:
+        check("invalid pattern raises", "ValueError", "ValueError")
+    for text, branch, files, want in [
+        ("on: push\n", "PROJ-epic0", None, "required"), ("on: [push, pull_request]\n", "x", None, "required"),
+        ("on: pull_request\n", "x", None, None), ("on:\n  push:\n    branches: [main]\n", "PROJ-epic0", None, None),
+        ("on:\n  push:\n    branches: [main]\n", "main", None, "required"),
+        ("on:\n  push:\n    branches:\n      - main\n      - \"PROJ-epic*\"\n  pull_request:\n", "PROJ-epic3", None, "required"),
+        ("on:\n  push:\n    branches: [main, 1.10, 010]\n", "1.10", None, "required"),
+        ("on:\n  push:\n    branches: [main, 1.10, 010]\n", "010", None, "required"),
+        ("%YAML 1.1\n---\non: push\n", "x", None, "required"),
+        ("on:\n  push:\n    tags: ['v*']\n", "main", None, None), ("on:\n  push:\n    branches-ignore: ['PROJ-*']\n", "PROJ-epic1", None, None),
+        ("on:\n  push:\n    branches-ignore: ['PROJ-*', '!PROJ-keep']\n", "PROJ-keep", None, "required"),
+        ("on:\n  push:\n    branches: [main]\n    tags: ['v*']\n", "x", None, None),
+        ("on:\n  push:\n    paths: ['src/**']\n", "x", None, "conditional"),
+        ("on:\n  push:\n    paths: ['src/**']\n", "x", ["src/a.py", "README.md"], "required"),
+        ("on:\n  push:\n    paths: ['src/**']\n", "x", ["README.md"], "conditional"),
+        ("on:\n  push:\n    paths-ignore: ['**.md']\n", "x", ["docs/a.md", "README.md"], "conditional"),
+        ("on:\n  push:\n    paths-ignore: ['**.md']\n", "x", ["README.md", "app.py"], "required"),
+        ("on:\n  push:\n", "x", None, "required"), ("on:\n  workflow_dispatch:\n", "x", None, None), ("name: no trigger\n", "x", None, None),
+    ]:
+        check(f"push_trigger({text!r}, {branch}, {files})", push_trigger(load_yaml(text), branch, files), want)
+    check("on_block(YAML 1.1 True key)", push_trigger({True: "push"}, "x", None), "required")
+
+    alias = lambda h: "github.com" if h == "gh-work" else h
+    for url, want in [
+        ("https://github.com/acme/widget.git", ("github.com", "acme", "widget")),
+        ("HTTPS://GitHub.com/acme/widget/", ("github.com", "acme", "widget")),
+        ("https://user:tok@github.com/acme/widget", ("github.com", "acme", "widget")),
+        ("git@github.com:acme/widget.git", ("github.com", "acme", "widget")),
+        ("ssh://git@ghe.example.com:2222/org/repo.git", ("ghe.example.com", "org", "repo")),
+        ("ssh://git@ssh.github.com:443/acme/widget.git", ("github.com", "acme", "widget")),
+        ("git@gh-work:acme/widget.git", ("github.com", "acme", "widget")),
+    ]:
+        check(f"parse_remote({url})", parse_remote(url, alias), want)
+    try:
+        parse_remote("/srv/git/widget"); check("parse_remote(local path) raises", "no error", "Unavailable")
+    except Unavailable:
+        check("parse_remote(local path) raises", "Unavailable", "Unavailable")
+    check("mask credentials", mask("https://user:tok@github.com/a/b"), "https://***@github.com/a/b")
+
+    S = "a" * 40
+    def r(i, path, st, concl, t="2026-01-01T00:00:00Z", sha=S):
+        return {"databaseId": i, "path": path, "status": st, "conclusion": concl, "createdAt": t, "headSha": sha}
+    req2 = [("w/ci.yml", "required", "ci"), ("w/lane.yml", "required", "lane")]
+    for label, exp, states, runs, want in [
+        ("both green", req2, {}, [r(1, "w/ci.yml", "completed", "success"), r(2, "w/lane.yml", "completed", "success")], "success"),
+        ("one running", req2, {}, [r(1, "w/ci.yml", "completed", "success"), r(2, "w/lane.yml", "in_progress", "")], "pending"),
+        ("red beats running", req2, {}, [r(1, "w/ci.yml", "completed", "failure"), r(2, "w/lane.yml", "queued", "")], "failure"),
+        ("one not registered", req2, {}, [r(1, "w/ci.yml", "completed", "success")], "pending"),
+        ("conditional absent", [("w/ci.yml", "required", "ci"), ("w/docs.yml", "conditional", "d")], {}, [r(1, "w/ci.yml", "completed", "success")], "success"),
+        ("conditional only, no run", [("w/docs.yml", "conditional", "d")], {}, [], "untriggered"),
+        ("conditional only, run registered", [("w/docs.yml", "conditional", "d")], {}, [r(5, "w/docs.yml", "queued", "")], "pending"),
+        ("optional never waited for", [("w/ci.yml", "required", "ci"), ("w/slow.yml", "optional", "s")], {}, [r(1, "w/ci.yml", "completed", "success"), r(6, "w/slow.yml", "waiting", "")], "success"),
+        ("optional red still counts", [("w/ci.yml", "required", "ci"), ("w/slow.yml", "optional", "s")], {}, [r(1, "w/ci.yml", "completed", "success"), r(6, "w/slow.yml", "completed", "failure")], "failure"),
+        ("optional not started", [("w/slow.yml", "optional", "s")], {}, [], "untriggered"),
+        ("extra run red", req2[:1], {}, [r(1, "w/ci.yml", "completed", "success"), r(3, "w/x.yml", "completed", "failure")], "failure"),
+        ("disabled not required", req2, {"w/lane.yml": "disabled_manually"}, [r(1, "w/ci.yml", "completed", "success")], "success"),
+        ("all disabled is none", req2, {"w/ci.yml": "disabled_manually", "w/lane.yml": "disabled_inactivity"}, [], "none"),
+        ("latest run wins", req2[:1], {}, [r(1, "w/ci.yml", "completed", "failure", "2026-01-01T00:00:00Z"), r(4, "w/ci.yml", "completed", "success", "2026-01-01T01:00:00Z")], "success"),
+        ("cancelled", req2, {}, [r(1, "w/ci.yml", "completed", "cancelled"), r(2, "w/lane.yml", "completed", "success")], "cancelled"),
+        ("timed out is red", req2[:1], {}, [r(1, "w/ci.yml", "completed", "timed_out")], "failure"),
+        ("stale is red", req2[:1], {}, [r(1, "w/ci.yml", "completed", "stale")], "failure"),
+        ("skipped is green", req2[:1], {}, [r(1, "w/ci.yml", "completed", "skipped")], "success"),
+        ("other sha ignored", req2[:1], {}, [r(1, "w/ci.yml", "completed", "success", sha="b" * 40)], "pending"),
+        ("two ids never merged", [], {}, [r(7, "workflow-id:7", "completed", "failure"), r(8, "workflow-id:8", "completed", "success", "2026-01-02T00:00:00Z")], "failure"),
+        ("nothing at all", [], {}, [], "none"),
+    ]:
+        check(f"verdict({label})", verdict(exp, states, runs, S)[0], want)
+    for line in bad:
+        print("FAIL " + line)
+    print(f"selftest {'ok' if not bad else 'FAILED'}: {n - len(bad)}/{n} cases")
+    return 0 if not bad else 1
+
+
+USAGE = 64
+
+
+def main(argv):
+    if not argv or argv[0] not in ("expected", "status", "selftest") or (argv[0] == "selftest" and len(argv) > 1):
+        print(__doc__, file=sys.stderr); return USAGE
+    if argv[0] == "selftest":
+        return selftest()
+    opts, args = {}, argv[1:]
+    if len(args) % 2:
+        print(__doc__, file=sys.stderr); return USAGE
+    for flag, value in zip(args[::2], args[1::2]):
+        if flag not in ("--branch", "--sha") or flag in opts or not value or value.startswith("-"):
+            print(__doc__, file=sys.stderr); return USAGE
+        opts[flag] = value
+    branch, sha = opts.get("--branch"), opts.get("--sha")
+    if not branch or (argv[0] == "status" and not sha):
+        print(__doc__, file=sys.stderr); return USAGE
+    try:
+        sha = run(["git", "rev-parse", "--verify", "--quiet", f"{sha or 'HEAD'}^{{commit}}"]).strip()
+        if argv[0] == "expected":
+            exp = expected(branch, sha, optional_paths(), commit_files(sha))
+            for p, k, name in exp:
+                print(f"{p}\t{k}\t{name}")
+            return 0 if exp else EXIT["none"]
+        result, rows, judged = judge(Ctx(branch), sha)
+        report(result, rows, sha, branch, judged)
+        return EXIT[result]
+    except Unavailable as e:
+        reason = " ".join(str(e).split())
+        print(f"result=unavailable sha={sha or '-'} branch={branch} runs=none missing=none via=none reason={reason}")
+        return EXIT["unavailable"]
+
+
+if __name__ == "__main__":
+    for stream in (sys.stdout, sys.stderr):
+        stream.reconfigure(encoding="utf-8", errors="replace")  # Windows pipes default to a code page
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except Exception as e:  # never let a crash read as a CI verdict: uv and Python exit 1 or 2 on their own
+        reason = " ".join(f"{type(e).__name__}: {e}".split())[:300]
+        print(f"result=unavailable sha=- branch=- runs=none missing=none via=none reason=internal error: {reason}")
+        sys.exit(EXIT["unavailable"])
+```
+
 **`.gitignore`:** append `_bmad-output/unattended/` (create the file if absent; skip if the line is already there). The run state directory must stay out of git: an owner's answer written while a stage runs must not dirty the tree that `bmad-build-auto`'s finalize checks.
 
 **`.gitattributes`:** append `_bmad/scripts/*.sh text eol=lf` (create the file if absent; skip if the line is already there). A CRLF checkout — Git for Windows' default — breaks `ledger.sh` and `unattended-inbox.sh` (`set: pipefail: invalid option name`), and every worktree is a fresh checkout.
@@ -1440,7 +1986,7 @@ Uses the standard `Agent` tool to spawn pipeline-stage subagents and the `Skill`
 
 If `Agent` is a deferred tool, load its schema via `ToolSearch` with `"select:Agent"` before first use. If `Agent` is unavailable, halt and surface to the user.
 
-**BMAD + runtime gate (second action):** read `installation.version` from `_bmad/_config/manifest.yaml` and require ≥ 6.11.0 — this command drives `bmad-build-auto`, which does not exist earlier (6.10 projects: use the pre-6.11 kit). **BMAD v7 gate**, checked before the version comparison (a v7 project may have no manifest, or a stale 6.12 one under v7 skills): `.claude/skills/bmad-build-auto/customize.toml` (or its plugin-namespaced equivalent) must declare `[[workflow.review_layers]]`, and no `bmod-method/bmod.toml` may exist under the project's `.claude/skills/`. (One only under `~/.claude/skills/` is a user-level v7 preview: if `_bmad/custom/kit-versions.yaml` records `v7_global_accepted:`, log `v7_global accepted=<date>` and continue; otherwise HALT and tell the user to remove the preview or re-run the kit's install Step 1, which records the acceptance.) Otherwise HALT with: "This kit supports BMAD Method 6.11–6.12.x. This project runs BMAD v7 (<the marker found>), which replaces the review layers, sprint planning and story files the kit drives — its overrides would stop v7's renderer. To keep using these kits, keep the project on 6.12.x (`npx bmad-method@6.12 install --action update --modules bmm --tools claude-code --yes` in the project directory); try the v7 preview in a separate clone." Run `uv --version`; HALT with the install pointer (https://docs.astral.sh/uv/) if it fails — `bmad-build-auto` renders itself through `uv run _bmad/scripts/render_skill.py` and halts on activation without it. Then run `uv run --no-cache _bmad/scripts/resolve_config.py --project-root <abs-root> --key core.project_name`: exit 0 proves uv can run BMAD's scripts (Python ≥ 3.11 available or provisioned); exit 3 means no Python 3.11+ — HALT. Verify these exist: `.claude/skills/bmad-build-auto/SKILL.md`, `.claude/skills/bmad-code-review/SKILL.md`, `.claude/skills/bmad-qa-generate-e2e-tests/SKILL.md`, `.claude/skills/bmad-sprint-planning/scripts/sprint_plan.py` (on a plugin-namespaced install, the equivalent paths). Verify the durable state is tracked: `git check-ignore -q _bmad-output/implementation-artifacts` must FAIL (exit 1) — if the directory is gitignored, HALT: cycle logs, `sprint-status.yaml`, specs and the ledger must live on the epic branch (resume, bookkeeping commits, and the parallel merge queue depend on it); the user removes `_bmad-output/` from `.gitignore` (keeping `_bmad/render/`, `*.user.toml`, `.worktrees/` ignored). Then determine how CI can be read (see "CI Is a Gate"): `ci=gh` when `.github/workflows/` holds a `*.yml` or `*.yaml` workflow, `gh auth status` succeeds, and `git remote get-url origin` is a GitHub URL; `ci=none` only when the repo has no CI configuration at all — no GitHub workflow and none of `.gitlab-ci.yml`, `azure-pipelines.yml`, `.circleci/config.yml`, `Jenkinsfile`, `bitbucket-pipelines.yml`, `.buildkite/`, `.travis.yml`, `.drone.yml`; `ci=unavailable` otherwise (CI exists, but this session cannot read its results) — surface `unavailable` once ("CI results cannot be read from this session; the merge gate will ask you to confirm CI by hand") rather than proceeding as if the suite's local result were the shipped one. Log `runtime_gate bmad=<version> uv=<version> ci=<gh|none|unavailable>`. Resolve `<project_name>`, `<impl>` and `<planning>` with BMAD's config resolver (the shorthand paragraph below). Read the launch environment ("Permission Mode": `printenv CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH CLAUDE_CODE_RETRY_WATCHDOG BASH_MAX_TIMEOUT_MS`) and log `launch_env`; an explicit depth below what the run needs (2 sequential, 3 parallel) → HALT and say which setting to raise.
+**BMAD + runtime gate (second action):** read `installation.version` from `_bmad/_config/manifest.yaml` and require ≥ 6.11.0 — this command drives `bmad-build-auto`, which does not exist earlier (6.10 projects: use the pre-6.11 kit). **BMAD v7 gate**, checked before the version comparison (a v7 project may have no manifest, or a stale 6.12 one under v7 skills): `.claude/skills/bmad-build-auto/customize.toml` (or its plugin-namespaced equivalent) must declare `[[workflow.review_layers]]`, and no `bmod-method/bmod.toml` may exist under the project's `.claude/skills/`. (One only under `~/.claude/skills/` is a user-level v7 preview: if `_bmad/custom/kit-versions.yaml` records `v7_global_accepted:`, log `v7_global accepted=<date>` and continue; otherwise HALT and tell the user to remove the preview or re-run the kit's install Step 1, which records the acceptance.) Otherwise HALT with: "This kit supports BMAD Method 6.11–6.12.x. This project runs BMAD v7 (<the marker found>), which replaces the review layers, sprint planning and story files the kit drives — its overrides would stop v7's renderer. To keep using these kits, keep the project on 6.12.x (`npx bmad-method@6.12 install --action update --modules bmm --tools claude-code --yes` in the project directory); try the v7 preview in a separate clone." Run `uv --version`; HALT with the install pointer (https://docs.astral.sh/uv/) if it fails — `bmad-build-auto` renders itself through `uv run _bmad/scripts/render_skill.py` and halts on activation without it. Then run `uv run --no-cache _bmad/scripts/resolve_config.py --project-root <abs-root> --key core.project_name`: exit 0 proves uv can run BMAD's scripts (Python ≥ 3.11 available or provisioned); exit 3 means no Python 3.11+ — HALT. Verify these exist: `.claude/skills/bmad-build-auto/SKILL.md`, `.claude/skills/bmad-code-review/SKILL.md`, `.claude/skills/bmad-qa-generate-e2e-tests/SKILL.md`, `.claude/skills/bmad-sprint-planning/scripts/sprint_plan.py` (on a plugin-namespaced install, the equivalent paths). Verify the durable state is tracked: `git check-ignore -q _bmad-output/implementation-artifacts` must FAIL (exit 1) — if the directory is gitignored, HALT: cycle logs, `sprint-status.yaml`, specs and the ledger must live on the epic branch (resume, bookkeeping commits, and the parallel merge queue depend on it); the user removes `_bmad-output/` from `.gitignore` (keeping `_bmad/render/`, `*.user.toml`, `.worktrees/` ignored). Then determine how CI can be read (see "CI Is a Gate"): `ci=gh` when `.github/workflows/` holds a `*.yml` or `*.yaml` workflow, `gh auth status` succeeds, and `git remote get-url origin` is a GitHub URL (each epic then checks that a workflow runs on a push to its branch — "CI Is a Gate"); `ci=none` only when the repo has no CI configuration at all — no GitHub workflow and none of `.gitlab-ci.yml`, `azure-pipelines.yml`, `.circleci/config.yml`, `Jenkinsfile`, `bitbucket-pipelines.yml`, `.buildkite/`, `.travis.yml`, `.drone.yml`; `ci=unavailable` otherwise (CI exists, but this session cannot read its results) — surface `unavailable` once ("CI results cannot be read from this session; the merge gate will ask you to confirm CI by hand") rather than proceeding as if the suite's local result were the shipped one. Log `runtime_gate bmad=<version> uv=<version> ci=<gh|none|unavailable>`. Resolve `<project_name>`, `<impl>` and `<planning>` with BMAD's config resolver (the shorthand paragraph below). Read the launch environment ("Permission Mode": `printenv CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH CLAUDE_CODE_RETRY_WATCHDOG BASH_MAX_TIMEOUT_MS`) and log `launch_env`; an explicit depth below what the run needs (2 sequential, 3 parallel) → HALT and say which setting to raise.
 
 **Unattended run lock (attended runs — under `--unattended` the doctrine's U2 decides instead, and a runner skips this):** if `_bmad-output/unattended/run.lock` or `<worktree_base>/.coordination/unattended/run.lock` exists, an unattended run may hold this checkout — show `bash _bmad/scripts/unattended-inbox.sh <its directory> run-status` and stop; only the owner can confirm that run is dead and release its lock (doctrine U10, last bullet). Two sessions never work one checkout.
 
@@ -1462,7 +2008,7 @@ If `Agent` is a deferred tool, load its schema via `ToolSearch` with `"select:Ag
 1. **Lead** verifies a clean working tree across the parent repo and every submodule listed in `.gitmodules`; halts on dirty state.
 2. **Lead** determines per-repo resume mode (see "Resume Semantics").
 3. For repos in FRESH mode: **Lead** verifies (or creates with user authorization) the feature branch per Rule SC-1, then verifies (or creates) the epic branch `{TICKET}-epic{N}` per Rule SC-2.
-4. **Lead** checks every affected repo out to `{TICKET}-epic{N}` and logs `epic_branch_checked_out` (on the run's first epic, after first writing the held pre-flight entries — see "Cycle Log Format", `runtime_gate`); then resolves the **architecture spine** (Rule 6: newest `ARCHITECTURE-SPINE.md` with `status: final` under `<planning>/architecture/*/`, else the newest spine, else any `*architecture*.md` under `<planning>`, else none), counts its `### AD-` blocks, and logs `spine_resolved path=<path|none> ads=<N> status=<final|draft|none>`. The path goes into every spawn prompt; Rule 20 writes go to this file.
+4. **Lead** checks every affected repo out to `{TICKET}-epic{N}` and logs `epic_branch_checked_out` (with `ci=gh`, after the per-epic CI check — "CI Is a Gate"; on the run's first epic, after first writing the held pre-flight entries — see "Cycle Log Format", `runtime_gate`); then resolves the **architecture spine** (Rule 6: newest `ARCHITECTURE-SPINE.md` with `status: final` under `<planning>/architecture/*/`, else the newest spine, else any `*architecture*.md` under `<planning>`, else none), counts its `### AD-` blocks, and logs `spine_resolved path=<path|none> ads=<N> status=<final|draft|none>`. The path goes into every spawn prompt; Rule 20 writes go to this file.
 5. **Lead** measures the ledger (`LEDGER load`; re-owns any `owner=none` entry) and logs `ledger_load`, then executes `/bmad-sprint-planning` directly, **headless**, with the load in its argument, and branches on its readiness `gate` (see "Sprint Planning Per Epic" and "Ledger Drain").
 6. If a previous epic's retrospective, the ledger (`LEDGER slice all`), or open `action_items` in `sprint-status.yaml` have unresolved items, **Lead** reviews them, **closes** each (resolve / own / terminal — Rule 17), and creates Story X.0 via a `bmad-build-auto` plan spawn (see "Retrospective Review & Story X.0 Creation").
 
@@ -1477,7 +2023,7 @@ If `Agent` is a deferred tool, load its schema via `ToolSearch` with `"select:Ag
 7. Agent: `/bmad-code-review` on the Opus tier, with the spec path as the explicit argument (`review_mode = full`). After it returns: `SPRINT_PLAN validate` (the skill's own sprint-status sync is pre-answered to the script, but verify) and `grep -c "^## Deferred from:" <impl>/deferred-work.md` — if that count grew, the reviewer ignored the ledger pre-answer: harvest each stray bullet with `LEDGER new … cr`, strip the stray block (the one sanctioned edit — those bullets are not DW entries), and log `ledger_stray_bullets harvested=N`. Copy the reviewer's `entries:` line into `cr_complete` (root-cause counts, `rows=`, `unresolved_high_med=`). If the review leaves the story `in-progress` (a HIGH, or — first review only — an unpatched in-story MED), run the Rework Loop (max 3 iterations; each re-review scoped to the rework; a re-review with no HIGH closes the story) before proceeding.
 8. **Lead** adjudicates the ledger slice this story owns (Rule 17): every entry with effective `owner=<this story key>` is closed against DELIVERED scope — `resolved-by` with evidence, re-owned with the residual restated, or terminal — until `LEDGER slice <key>` reads empty. Logs `ledger_adjudicated`.
 9. **Lead** performs per-story smoke and then the fresh-environment check — the story's added and changed tests on a fresh environment, forward and reversed (Rule 19; see "Per-Story Smoke"); logs `smoke_complete` and `fresh_check`.
-10. **Lead** commits (QA tests, review patches, ledger, bookkeeping) and pushes — **only to the epic branch** in every affected repo, never to main/master/develop (Rule SC-3 + SC-6) — then records the CI run the push started on the `committed` entry (`ci=pending run=<id>`, or `ci=none` / `ci=unavailable` per the pre-flight; see "CI Is a Gate"), and logs `story_cycle` (see "Cycle Log Format"). The result is resolved before the next story's implement spawn, never assumed.
+10. **Lead** commits (QA tests, review patches, ledger, bookkeeping) and pushes — **only to the epic branch** in every affected repo, never to main/master/develop (Rule SC-3 + SC-6) — then records the CI runs the push started on the `committed` entry (`ci=pending runs=<ids>` — every workflow's, from `CI status` — or `ci=none` / `ci=unavailable` per the pre-flight; see "CI Is a Gate"), and logs `story_cycle` (see "Cycle Log Format"). The result is resolved before the next story's implement spawn, never assumed.
 
 A story therefore produces several commits on the epic branch: bookkeeping commits, the plan commit (spec), `bmad-build-auto`'s finalize commit (`build_sha`), and the lead's post-smoke commit (`committed sha`). That is by design; the epic's `--no-ff` merge preserves the graph.
 
@@ -1858,7 +2404,7 @@ For each epic in range:
     Lead logs spec_validated; SPRINT_PLAN generate --set <key>=ready-for-dev; bookkeeping commit (everything under implementation-artifacts)
 
     # --- IMPLEMENT (Sonnet) ---
-    Lead resolves the PREVIOUS story's ci=pending (gh run view) → logs ci_resolved   # resolution point (1): the plan above did not wait
+    Lead resolves the PREVIOUS story's ci=pending (CI status) → logs ci_resolved   # resolution point (1): the plan above did not wait
       failure → classify (logs ci_red_classified): infra → timed retry, never rework | flake → one rerun + flake: ledger entry | story → HIGH: re-open THAT story's spec with a [CI] task, one rework iteration, re-smoke, re-commit — this story's spec waits at ready-for-dev (inherited red → surface to the user)
     Lead: SPRINT_PLAN generate --set <key>=in-progress --set epic-{N}=in-progress; bookkeeping commit
     Lead invokes Agent for /bmad-build-auto with the spec path (model=sonnet unless re-pinned)
@@ -1885,7 +2431,7 @@ For each epic in range:
     Lead performs per-story smoke (lead-side); logs smoke_complete
     Lead runs the fresh-environment check (the story's added + changed tests on a fresh environment, forward then reversed — Rule 19); logs fresh_check; red → failed-smoke path
     Lead asserts current branch == {TICKET}-epic{N}; commits (QA tests, review patches, bookkeeping) + pushes ONLY to {TICKET}-epic{N} (submodules first if applicable)
-    Lead verifies the push on origin (git fetch; merge-base --is-ancestor) and the run's headSha; logs committed ci=pending run=<id> (gh run list --branch --commit; ci=none|unavailable per pre-flight); logs story_cycle; next story
+    Lead verifies the push on origin (git fetch; merge-base --is-ancestor) and the runs' headSha; logs committed ci=pending runs=<ids> (CI status: every workflow; ci=none|unavailable per pre-flight); logs story_cycle; next story
     # the pending run is resolved before the NEXT story's implement spawn — its plan proceeds meanwhile (see IMPLEMENT above)
 
   # Burn-down gate (Rule 17) — before the epic closes
@@ -1996,19 +2542,32 @@ The smoke is not a substitute for automated tiers; it's the final check that the
 
 Every quality gate in this pipeline runs the suite locally; none of them is the platform the project ships from. The CI run a push starts is therefore a first-class result, recorded write-ahead and resolved before the next irreversible step — never awaited per story (wall-clock), never assumed green.
 
-**Pre-flight (once per run, on `runtime_gate`):** `ci=gh` when `.github/workflows/` holds a `*.yml` or `*.yaml` workflow, `gh auth status` succeeds, and `origin` is a GitHub remote; `ci=none` only when the repo has no CI configuration at all (no GitHub workflow and none of `.gitlab-ci.yml`, `azure-pipelines.yml`, `.circleci/config.yml`, `Jenkinsfile`, `bitbucket-pipelines.yml`, `.buildkite/`, `.travis.yml`, `.drone.yml`); `ci=unavailable` when CI exists but its results cannot be read here — `gh` missing or unauthenticated, a non-GitHub remote, or another CI system — surface `unavailable` once ("CI results cannot be read from this session; the merge gate will ask you to confirm CI by hand") rather than silently skipping.
+**`CI`** means `uv run --no-cache _bmad/scripts/ci-gate.py` (installed by the kit). A project may run several workflows per push (field report 2026-10-19: `ci` and `lane-a`), and the gate is every one of them. Never read a single run with a limit of 1: it returns whichever workflow registered first. `CI status --branch <branch> --sha <sha>` reads every push run for that exact commit and takes each workflow's latest. It also adds each workflow that, by the commit's own workflow files, a push to that branch starts but that has no run yet. It judges the push, as GitHub does, and GitHub's push activity names the push's range: a `paths` filter is judged on the whole push, a commit pushed beneath others is judged by its push's head, and a push that started no workflow (it changed nothing a `paths` filter watches) carries the verdict of the last push before it that ran CI. It prints `result=<…> sha= branch= runs=<ids> missing=<paths> via=<sha|none>`, then one line per workflow (run id, status, conclusion, link); `via=` names the commit the verdict comes from when it is not the one asked about. `CI expected --branch <branch>` lists the workflows alone. Ask only about a pushed commit (`git merge-base --is-ancestor <sha> origin/<branch>` after a fetch): for a commit that never reached origin, `missing` means not pushed, not not-yet-registered. Only push-triggered workflows are gated: one that another workflow's completion starts (`workflow_run`) is not. A workflow the gate must never wait for (one held for a manual approval, say) goes in the project-owned `_bmad/custom/ci-gate.yaml` as `optional: [.github/workflows/<file>]`; a finished run of it still counts.
 
-**At `committed`:** after the push, `gh run list --branch {TICKET}-epic{N} --commit <sha> --json databaseId,status,conclusion -L 1` (retry a few times over ~30 s — the run registers shortly after the push); record `ci=pending run=<id>` (or `ci=success` if it already finished; `ci=none` / `ci=unavailable` per pre-flight). No waiting. Push the code commit on its own and confirm its run registered for that exact sha (match `headSha`) before any further push to the branch — a workflow with `concurrency: cancel-in-progress` cancels the run being waited on when a later push lands. Never put a CI-skip token in a code commit's message: a quoted `[skip ci]` skips the run all the same.
+**Reading the result** — always the first line's `result=`, never the exit code alone: `uv` and Python have exit codes of their own, and output with no `result=` line counts as `unavailable`.
+- `success` — every run green (`skipped` and `neutral` count as green). Exit 0.
+- `failure` — any red: `failure`, `timed_out`, `startup_failure`, `action_required`. A red outranks a run still going, so act on it at once: classify it (below). Exit 10.
+- `cancelled` — re-check the head you are gating; a run cancelled on that head is re-run (`gh run rerun <id>`) and waited for. Exit 11.
+- `pending` — a run queued or running, or a required workflow with no run yet (`missing=`): wait. Exit 12.
+- `untriggered` — workflows exist, but no push up to this commit ever started one: each changed nothing a `paths` filter watches. It passes like `success`, logged as `untriggered`. Read within two minutes of its push, read it again after about 90 s first: where GitHub's push activity cannot be read, a run not yet registered looks the same. Exit 15.
+- `none` — no active workflow runs on a push to this branch at all (every one disabled counts). On an epic branch, the epic runs as `ci=unavailable reason=no_push_trigger`, as the per-epic check would have found. On the feature branch it passes, logged as `none`: the feature head is a merge of CI-verified epic heads. It is not the pre-flight's `ci=none`, a project without CI. Exit 13.
+- `unavailable` — `gh` missing or unauthenticated, an API or network error, or a CI-skip token in the commit message (the reason says which): retry about a minute apart, three times, then treat it as an infrastructure outage (surface it; *Unattended:* U5's CI outage rule). Exit 14.
 
-**Resolution points — each logs `ci_resolved story=<id> run=<id> result=<success|failure|cancelled>`:** (1) before the next story's implement spawn (Task Sequence per-story step 4) — the next story's plan, spec validation and spec gate proceed meanwhile, and a red reworks the previous story first while the new spec waits at `ready-for-dev` (field report 2026-10-10: waiting at the plan spawn idled the lead about 30 minutes per story); (2) at the burn-down gate; (3) at SC-4 / SC-4-P as the merge precondition (`ci_green_verified` on the branch head, or `merge_gate_blocked reason=ci_red`); (4) at resume (cross-stage integrity check 6). `gh run view <id> --json status,conclusion`; still `in_progress` → wait here, with jitter, up to the project's usual run time.
+**Pre-flight (once per run, on `runtime_gate`):** `ci=gh` when `.github/workflows/` holds a `*.yml` or `*.yaml` workflow, `gh auth status` succeeds, and `origin` is a GitHub remote (each epic then checks that a workflow runs on a push to its branch — below); `ci=none` only when the repo has no CI configuration at all (no GitHub workflow and none of `.gitlab-ci.yml`, `azure-pipelines.yml`, `.circleci/config.yml`, `Jenkinsfile`, `bitbucket-pipelines.yml`, `.buildkite/`, `.travis.yml`, `.drone.yml`); `ci=unavailable` when CI exists but its results cannot be read here — `gh` missing or unauthenticated, a non-GitHub remote, or another CI system — surface `unavailable` once ("CI results cannot be read from this session; the merge gate will ask you to confirm CI by hand") rather than silently skipping.
 
-**On `failure` — classify first, then act; log `ci_red_classified run=<id> class=<story|flake|infra> test=<name|none>`.** `infra`: the run failed before any test ran (runner lost, image-pull or registry limit, network, provisioning) — retry it on a timer (about 10, 20, then 40 minutes) and never count it as rework; three infra reds in a row → surface to the user (*Unattended:* re-run and poll, then doctrine U5's CI rows). `flake`: the failing test already has an open `flake:` ledger entry, or it fails and then passes on one unchanged rerun — rerun once, and file a `flake: <test>` ledger entry (or append an `occurrence=`) routed to the burn-down with priority; the same test red twice on the same head is `story`. `story`: anything else — the path that follows. (Field report 2026-10-10: five different flaky tests forced reruns in two days, and one merge needed five attempts — a flake, then three registry pull-limit failures in which no test ran.)
+**Per epic, once its branch is named** (Task Sequence step 4): with `ci=gh`, `CI expected --branch {TICKET}-epic{N}` must list a workflow. If it lists none, no workflow runs on a push to the epic branch: the epic runs as `ci=unavailable reason=no_push_trigger` (on its `epic_branch_checked_out` entry), surfaced once — "no workflow runs on a push to `{TICKET}-epic{N}`; the merge gate will ask you to confirm CI by hand" (*Unattended:* the first epic's check runs in the attended setup, U2; a later epic follows `ci.without_ci`, or stops if it is empty).
 
-**On a `story` red:** if the failing job's first red commit is the story just committed → a HIGH finding against it, never deferrable, same path as a failed smoke: re-open the spec with `- [ ] [CI] <job>: <failure summary> — <link>` under Tasks & Acceptance, rework commit, implement re-spawn, code-review re-spawn, re-smoke, re-commit, new `ci=pending`. If the red predates the story (inherited) → surface to the user with the run link and the first red sha; do not start new work on a red branch (*Unattended:* rerun, then at most one fix-forward per root cause, else stop the epic — U5). `cancelled` → re-check the latest run for the branch head before deciding.
+**At `committed`:** after the push, `CI status --branch {TICKET}-epic{N} --sha <sha>` (retry a few times over ~30 s while it reports a workflow `missing` — runs register shortly after the push); record `ci=pending runs=<ids>` — always `pending`, even when every listed run has finished: a `paths`-filtered workflow may register later, and resolution point 1 re-reads them all (`ci=none` / `ci=unavailable` per pre-flight). No waiting. Push the code commit on its own and confirm every workflow's run registered for that exact sha (`missing=none`) before any further push to the branch — a workflow with `concurrency: cancel-in-progress` cancels the run being waited on when a later push lands. Never put a CI-skip token in a code commit's message: a quoted `[skip ci]` skips the run all the same.
 
-**Runner mode (parallel kit):** identical inside the worktree; the completion contract carries `ci: <success|none|unavailable> run=<id>` for `head:`, and the orchestrator verifies it independently before the merge gate.
+**Resolution points — each logs `ci_resolved story=<id> sha=<sha> runs=<ids> result=<success|failure|cancelled|untriggered|none> failed=<workflow paths|none>`:** (1) before the next story's implement spawn (Task Sequence per-story step 4) — the next story's plan, spec validation and spec gate proceed meanwhile, and a red reworks the previous story first while the new spec waits at `ready-for-dev` (field report 2026-10-10: waiting at the plan spawn idled the lead about 30 minutes per story); (2) at the burn-down gate; (3) at SC-4 / SC-4-P as the merge precondition (`ci_green_verified` on the branch head, or `merge_gate_blocked reason=ci_red`); (4) at resume (cross-stage integrity check 6). `CI status --branch <branch> --sha <sha>` re-reads every run, so one that registered late counts too. `pending` → wait here, with jitter, up to the project's usual run time; a required workflow still `missing` after that is surfaced like a red (*Unattended:* U5's queue limit).
 
-**Verified on origin, never inferred from an exit status.** `committed`, `ci_green_verified` and `epic_merged_to_feature` are written only after `git fetch` and `git merge-base --is-ancestor <sha> origin/<branch>` succeed for the pushed or merged sha, and — for a green — `gh run view <id> --json headSha,conclusion` names that exact head. (Field report 2026-10-10: a merge was reported but never pushed; an `&&` guard skipped the push silently.)
+**On `failure` — classify first, then act; log `ci_red_classified run=<id> workflow=<path> class=<story|flake|infra> test=<name|none>` for each red run `CI status` lists — the infrastructure streak and the first red commit are counted per workflow.** `infra`: the run failed before any test ran (runner lost, image-pull or registry limit, network, provisioning) — re-run it on a timer, about 10, 20, then 40 minutes apart (`gh run rerun <id> --failed`), and never count it as rework; three infra reds in a row → surface to the user (*Unattended:* re-run and poll, then doctrine U5's CI rows). `flake`: the failing test already has an open `flake:` ledger entry, or it fails and then passes on one unchanged rerun — rerun once, and file a `flake: <test>` ledger entry (or append an `occurrence=`) routed to the burn-down with priority; the same test red twice on the same head is `story`. `story`: anything else — the path that follows. (Field report 2026-10-10: five different flaky tests forced reruns in two days, and one merge needed five attempts — a flake, then three registry pull-limit failures in which no test ran.)
+
+**On a `story` red:** if the failing job's first red commit is the story just committed → a HIGH finding against it, never deferrable, same path as a failed smoke: re-open the spec with `- [ ] [CI] <job>: <failure summary> — <link>` under Tasks & Acceptance, rework commit, implement re-spawn, code-review re-spawn, re-smoke, re-commit, new `ci=pending`. If the red predates the story (inherited) → surface to the user with the run link and the first red sha; do not start new work on a red branch (*Unattended:* rerun, then at most one fix-forward per root cause, else stop the epic — U5). `cancelled` → as "Reading the result" says.
+
+**Runner mode (parallel kit):** identical inside the worktree; the completion contract carries `ci: <success|untriggered|none|unavailable> runs=<ids>` for `head:`, and the orchestrator verifies it independently (`CI status`) before the merge gate.
+
+**Verified on origin, never inferred from an exit status.** `committed`, `ci_green_verified` and `epic_merged_to_feature` are written only after `git fetch` and `git merge-base --is-ancestor <sha> origin/<branch>` succeed for the pushed or merged sha, and — for a green — `CI status` reports `result=success` (or `untriggered`) for that exact sha (it reads only runs whose `headSha` is that sha, and every workflow's). (Field report 2026-10-10: a merge was reported but never pushed; an `&&` guard skipped the push silently.)
 
 ### Ledger Drain (Critical Gates — Rule 17)
 
@@ -2201,7 +2760,7 @@ After the retrospective gate (whether opted in or not), the lead pauses (*Unatte
 
 > "Epic {N} is complete. Merge `{TICKET}-epic{N}` into the feature branch and delete the epic branch (local + remote) in every affected repo?"
 
-**Precondition — the branch head's CI is green.** `gh run list --branch {TICKET}-epic{N} --commit $(git rev-parse HEAD) --json databaseId,status,conclusion -L 1` (or the equivalent for the project's CI): `success` (or `ci=none` for a project without CI) is required; `failure` → log `merge_gate_blocked reason=ci_red run=<id> job=<name>` and surface the failing job instead of the merge question — the branch is not mergeable while it is red, whatever the local suite says (field report 2026-08-30: a branch red for ~16 h passed two full story pipelines); `pending` → wait; `unavailable` → say so and ask the user to confirm CI by hand (*Unattended:* as chosen at launch — U2). Log `ci_green_verified run=<id> head=<sha>` on success.
+**Precondition — the branch head's CI is green.** CI judged the epic's last pushed commit, not the epic-close bookkeeping commits on top of it: those are never pushed on their own, and the merge carries them. `git fetch origin {TICKET}-epic{N}`; `H=$(git rev-parse origin/{TICKET}-epic{N})`; `git merge-base --is-ancestor $H HEAD` must hold — if it does not, or `origin/{TICKET}-epic{N}` is missing, stop and surface it: never merge, never delete the remote branch — and every file `git diff --name-only $H HEAD` lists must be a bookkeeping path (Rule 16: `<impl>`, `<planning>`, `_bmad/custom/model-overrides.yaml`). Anything else is pushed and its CI resolved first. Then `CI status --branch {TICKET}-epic{N} --sha $H` (or the equivalent for the project's CI): `success` on every workflow — or `untriggered` (nothing a workflow watches changed), or the pre-flight's `ci=none` for a project without CI — is required; `failure` → log `merge_gate_blocked reason=ci_red runs=<the red runs> job=<name>` and surface the failing job instead of the merge question — the branch is not mergeable while it is red, whatever the local suite says (field report 2026-08-30: a branch red for ~16 h passed two full story pipelines); `pending` → wait; `unavailable` → retry as "Reading the result" says. Confirming CI by hand (*Unattended:* as chosen at launch — U2) is only for an epic that runs without readable CI: `ci=unavailable` at the pre-flight, or `reason=no_push_trigger`. With `ci=gh`, CI that stays unreadable holds the merge like an infrastructure outage — never a merge on local green. `cancelled` → as "Reading the result" says. Log `ci_green_verified runs=<ids> head=$H` on success.
 
 Before asking, (1) surface the burn-down gate's result for this epic (`ledger_burndown_*` entry: what was resolved, made terminal, chartered into the burn-down story, the overflow re-owned to which next-epic keys, and the drain ratio), and (2) run the **epic-close decision sheet** (see "Ledger Drain"): every `escalated` and `decision-pending` entry, presented once with a recommended disposition, the user's answers written as `by=merge_gate` trailer lines and logged `decision_sheet_recorded` — the burn-down gate set these aside precisely because only the user can decide them. If this is the range's FINAL epic, follow the merge with the ledger sweep: `LEDGER slice all` — every remaining non-terminal entry must already be owned by a named story key outside the range; present the list with a recommended disposition for each — the end-of-project triage, sized for one sitting.
 
@@ -2317,7 +2876,7 @@ For a repo in RESUME mode:
 3. **`sprint-status.yaml` agrees with cycle log and specs.** Story marked `done` in YAML with no `committed` entry (or vice versa), or `review` in YAML with a spec not at `done` = divergence; surface to user. Exemption: a story whose highest anchor is `cr_complete` with a Fix Pack or rework in flight legitimately reads `done` (code review wrote it) or `in-progress` before its `committed` entry exists — resume at the rework/smoke step, not as divergence. `SPRINT_PLAN validate` must report `valid: true`.
 4. **Submodule pointer consistency.** If `{TICKET}-epic{N}` on the parent recorded a submodule pointer at commit S, the submodule's `{TICKET}-epic{N}` must contain S. Mismatch = INTEGRITY_ERROR.
 5. **Clean tree before the first build-auto spawn** (Rule 16) — a dirty tree at resume is evidence (check 4 in resume-point computation), never something to silently commit or discard.
-6. **No `committed` entry is left at `ci=pending`.** Resolve each one (`gh run view <id> --json status,conclusion`) and log `ci_resolved` before resuming any stage; a `failure` is handled per "CI Is a Gate" before new work starts.
+6. **No `committed` entry is left at `ci=pending`.** Resolve each one by its commit (`CI status --branch {TICKET}-epic{N} --sha <its sha>`; an entry from before 2026-10-19.2 names one `run=`, which may be one of several workflows) and log `ci_resolved` before resuming any stage; a `failure` is handled per "CI Is a Gate" before new work starts.
 
 #### Resume interactions with parallel epics (SC-8)
 
@@ -2518,7 +3077,7 @@ Per-stage log entries, append-only. File: `_bmad-output/implementation-artifacts
 - Fields separated by a literal TAB (`\t`), not spaces.
 - The **metadata** field is whitespace-separated `key=value` pairs. Multi-values comma-separated; no spaces or tabs inside values (percent-encode if needed). Keys are lowercase snake_case.
 - **Every sha is read, never recalled.** A `sha=` / `head=` / `build_sha=` / `baseline_revision=` value — in a log entry, a `## Clarification Needed`, or a completion contract — is produced by `git rev-parse --short <ref>` at the moment of writing, never from earlier context (field case 2026-08-29: a clarification quoted a HEAD that did not exist in the repository). The party reading a quoted sha verifies it resolves (`git cat-file -e <sha>`) before acting on it and logs a mismatch as `report_error fault=<lead|stage|runner> field=<name> reported=<sha> actual=<sha>`.
-- **Durable facts are verified on origin.** `committed`, `ci_green_verified` and `epic_merged_to_feature` are written only after `git fetch` and `git merge-base --is-ancestor <sha> origin/<branch>` succeed, and a green only when `gh run view <id> --json headSha,conclusion` names that exact head ("CI Is a Gate").
+- **Durable facts are verified on origin.** `committed`, `ci_green_verified` and `epic_merged_to_feature` are written only after `git fetch` and `git merge-base --is-ancestor <sha> origin/<branch>` succeed, and a green only when `CI status` reports every workflow green (or `untriggered`) on that exact head ("CI Is a Gate").
 - **A CI-fix commit is logged under the story it fixes** (`committed … fix_for=<story-key>`), never under the story in flight — otherwise one story's cycle time absorbs another's fix (field report 2026-10-10: one story read 16.4 hours when it took 5.6).
 - Two entry kinds (distinguished by field 2):
   - **Story-level:** `Story <id>` (most entries).
@@ -2532,7 +3091,7 @@ Per-stage log entries, append-only. File: `_bmad-output/implementation-artifacts
 
 - `feature_branch_created` — SC-1 created the feature branch. Metadata: `repos=<paths>` `ticket=<id>` `description=<desc>` `root=<origin/branch>`.
 - `epic_branch_created` — SC-2 created `{TICKET}-epic{N}`. Metadata: `repos=<paths>` `from=<feature-sha>`.
-- `epic_branch_checked_out` — Lead checked out `{TICKET}-epic{N}` (resume or after creation). Metadata: `repos=<paths>` `head=<sha>`.
+- `epic_branch_checked_out` — Lead checked out `{TICKET}-epic{N}` (resume or after creation). Metadata: `repos=<paths>` `head=<sha>`, plus `ci=unavailable reason=no_push_trigger` when no workflow runs on a push to the epic branch ("CI Is a Gate").
 - `epic_branch_reopened` — SC-5 recreated after a prior merge. Metadata: `reason=<short>` `from=<feature-sha>`.
 - `lead_model_gate` — Pre-flight lead-tier check. Metadata: `model=<detected>` `action=proceed|user_accepted`.
 - `runtime_gate` — Pre-flight BMAD/uv/CI check. Metadata: `bmad=<version>` `uv=<version>` `ci=<gh|none|unavailable>`. (Pre-flight entries are held until Task Sequence step 4 has checked the FIRST epic of the range out to its epic branch, then written to that epic's cycle log, as `Epic <N>`, ahead of this run's other entries and committed with its first bookkeeping commit — never written before step 1's clean-tree check, which they would fail, and never on the feature branch or the trunk. A crash before then loses nothing: the pre-flight runs again on every invocation.)
@@ -2546,8 +3105,8 @@ Per-stage log entries, append-only. File: `_bmad-output/implementation-artifacts
 - `ledger_stray_bullets` — A reviewer wrote `## Deferred from:` bullets instead of ledger entries; the lead harvested them. Metadata: `harvested=N story=<key>`.
 - `ledger_owner_repaired` — `ledger_load` found `UNKNOWN` owners and re-owned them by unique `<epic>-<story>-` prefix (Rule 17 (1)). Metadata: `repaired=N halted=N` (`halted` > 0 means an ambiguous key stopped the run).
 - `ledger_routed_planned` — `DW-n:` acceptance bullets written into receiving stories' `epics.md` blocks (Rule 17 (1b)). Metadata: `story=<key> entries=N excess=N by=<harvest|cr|adjudication|burndown|merge_gate>`.
-- `merge_gate_blocked` — SC-4 precondition failed. Metadata: `reason=<ci_red|…> run=<id> job=<name> head=<sha>`.
-- `ci_green_verified` — The branch head's CI run is `success`, read independently by the lead/orchestrator. Metadata: `run=<id> head=<sha>`.
+- `merge_gate_blocked` — SC-4 precondition failed. Metadata: `reason=<ci_red|…> runs=<ids> job=<name> head=<sha>`.
+- `ci_green_verified` — The branch head's CI is `success`: every run of every workflow the push started (`CI status`), read independently by the lead/orchestrator. Metadata: `runs=<ids> head=<sha>`, plus `result=<untriggered|none>` and `via=<sha>` when the verdict is not a plain `success` on the head itself.
 - `ledger_load` — Epic-start ledger measurement, before sprint planning (Rule 17). Metadata: `total=N open=N routed=N escalated=N decision_pending=N terminal=N burndown=N reowned_none=N`.
 - `sprint_planning_complete` — Sprint planning done. Metadata: `gate=<PASS|CONCERNS>`.
 - `ledger_burndown_complete` / `ledger_burndown_skipped` — End-of-epic burn-down gate (Rule 17), after the last `committed` and before `epic_status_done`. Metadata: `open_before=N resolved=N terminal=N chartered=N chartered_size=N overflow=N reowned=N to_decision_sheet=N open_after=N cap=N story_max=N filed_this_epic=N closed_this_epic=N drain_ratio=X.XX` for complete; `reason=empty` for skipped.
@@ -2582,8 +3141,8 @@ Per-stage log entries, append-only. File: `_bmad-output/implementation-artifacts
 - `cr_complete`: `resolved=N fixed_at_source=N by_design=N wontfix_theoretical=N routed=N escalated=N decision_pending=N deferred=N dismissed=N high=N med=N low=N rows=N unresolved_high_med=N clarifications=N closing_sections_present=true|false` — `high`/`med`/`low` are root-cause ENTRIES after the reviewer's step-03 grouping, copied from its `entries:` closing line; `rows` is the raw finding count the layers reported before grouping (volume, never a threshold input); `unresolved_high_med` is the high+med entries the reviewer left unresolved after its own patches — the model-tier checkpoint's escalation input (field report 2026-09-11: four layers filing one root cause as four rows roughly doubled the gross count the checkpoint read).
 - `ledger_adjudicated`: `owned=N resolved=N reowned=N terminal=N` (`owned` = slice size before; `resolved+reowned+terminal` must equal it).
 - `smoke_complete`: `method=<browser|cli|api|other> result=pass|fail iterations=N defects_caught=N evidence=<path>`.
-- `committed`: `sha=<short-hash> submodules=<paths-or-empty> ci=<pending|success|failure|none|unavailable> run=<id|none>` (`pending` is resolved by a later `ci_resolved`; a `committed` without `ci=` is a pre-2026-08-30.2 entry).
-- `ci_resolved`: `story=<id> run=<id> result=<success|failure|cancelled> resolved_at=<next_plan|burndown|merge_gate|resume>`.
+- `committed`: `sha=<short-hash> submodules=<paths-or-empty> ci=<pending|none|unavailable> runs=<ids|none>` (`pending` is resolved by a later `ci_resolved`; an older entry may carry `ci=success` or `ci=failure`; a `committed` with `run=<id>` is a pre-2026-10-19.2 entry, one without `ci=` a pre-2026-08-30.2 one).
+- `ci_resolved`: `story=<id> sha=<sha> runs=<ids> failed=<workflow paths|none> result=<success|failure|cancelled|untriggered|none> resolved_at=<next_plan|burndown|merge_gate|resume>`.
 
 **Cost telemetry (when available):** `input_tokens=N output_tokens=N cost_usd=X.XX` on any `*_complete` entry. Omit if not extractable.
 
@@ -2657,7 +3216,7 @@ Derivable from per-stage entries; a convenience, not a source of truth.
 - **Missing context handoff** — Not passing the spec path, `baseline_revision`, and the diff file list between stages; code reviewers can't review effectively.
 - **Parent-before-submodule push** — Broken submodule pointers on the remote. Always submodules-first.
 - **Normalizing known test failures** — Carrying forward "N pre-existing failures, unrelated" erodes baseline reliability. Fix or formally defer in `deferred-work.md` immediately.
-- **Treating a local green as a CI green** — every gate runs the suite on the lead's machine; the run that matters runs on the platform the project ships from, and nobody reads it unless a gate does. Record the run at `committed`, resolve it before the next plan spawn, and never present the merge question on a red head (see "CI Is a Gate").
+- **Treating a local green as a CI green** — every gate runs the suite on the lead's machine; the run that matters runs on the platform the project ships from, and nobody reads it unless a gate does. Record every workflow's run at `committed`, resolve them before the next implement spawn, and never present the merge question on a red head (see "CI Is a Gate").
 - **Routing to a key nobody validated** — `owner=<story key>` is a promise that a gate will enumerate the entry; a stale or mistyped key breaks the promise with no error and no count anomaly. `ledger.sh` refuses unknown owners; `ledger_load` repairs or halts on the ones that slipped through (Rule 17 (1)).
 - **Routing without planning** — an entry that exists only as `owner=<key>` in the ledger reaches that story's pipeline at `ledger_adjudicated`, after the design is fixed and code review has passed, where the only honest moves are re-own or a Fix Pack. Routed means planned: an acceptance bullet in `epics.md` and the plan spawn's ledger inbox (Rule 17 (1b)).
 - **Deferred findings only in spec files** — Without centralized tracking in `deferred-work.md`, deferred items are invisible to the drain (adjudication, burn-down, X.0).
@@ -2709,6 +3268,7 @@ Derivable from per-stage entries; a convenience, not a source of truth.
 - **Mis-scoping or forgetting to restore the IDE file-sync toggle** — On IRIS/ObjectScript projects, disable `objectscript.conn.active` ONLY transiently around each branch-changing git operation (Window A: epic-start branching; Window B: SC-4 merge), and restore it immediately after each window. Do NOT leave the sync disabled for the whole epic — the per-story pipeline (commits/pushes, which don't change branches) must run with the sync ON. Each window's restore is mandatory `try/finally`-style: restore on success, halt, failure, merge conflict, or cancellation; an un-restored toggle leaves the workspace silently disconnected from IRIS (no error — just no sync). Never `git add` the transiently-toggled `.vscode/settings.json` into any commit.
 - **Relying on a tool's default target** — a call that names no runtime target can be answered by a healthy, unrelated instance with the same namespace and credentials: plausible results, no error. Name the target on every call, make a tool that would fall back to a default fail instead, verify the target's identity rather than its health, and tear down only what your own session started (Rule 13).
 - **Logging a merge or a green from an exit status** — an `&&` chain skips silently, and a run can belong to another head. Verify on origin (`git merge-base --is-ancestor`) and by `headSha` before writing `committed`, `ci_green_verified` or `epic_merged_to_feature` ("CI Is a Gate").
+- **Reading one CI run per commit** — a project may run several workflows per push. A `gh run list` limited to one run returns whichever workflow registered first, so the gate passed while another was still running or red (field report 2026-10-19). `CI status` reads every workflow's run for the exact sha, and waits for a workflow that has not started yet.
 - **Treating every red CI run as the story's fault** — an infrastructure red (no test ran) gets a timed retry and never counts as rework; a known flake gets one rerun and a `flake:` ledger entry; only a `story` red re-opens the story ("CI Is a Gate").
 - **Shell traps in snippets** — in zsh, `$SHA:refs/…` reads `:r` as a history modifier: write `"${SHA}:refs/…"`. A code commit whose message quotes a CI-skip token gets no CI run. `jobs -p` inside `$( … )` returns nothing: capture `$!` per job. macOS deletes `/tmp` files left untouched for three days: keep throwaway state elsewhere.
 - **Asking inside an unattended loop** — after launch, an `--unattended` lead never asks, never calls `AskUserQuestion`, and never ends its turn waiting: every stop point is decide, veto, park, stop or hold (doctrine U3). A question that sits in chat stalls the run until someone happens to look.
@@ -2988,6 +3548,17 @@ After writing all files, run these checks:
    ```
    Expected exactly as commented.
 
+2d. **The CI gate is installed and sound:**
+   ```bash
+   ls _bmad/scripts/ci-gate.py
+   uv run --no-cache _bmad/scripts/ci-gate.py selftest                   # selftest ok: 74/74 cases (filter patterns, triggers, paths, remotes, verdicts)
+   grep -c "ci-gate.py" .claude/commands/epic-cycle.md                    # >= 1 (the CI shorthand)
+   grep -c "CI status" .claude/commands/epic-cycle.md                     # >= 8 (every CI read: commit, resolution, merge gate, resume)
+   grep -cE 'gh run view|(-L|--limit) ?1([^0-9]|$)' .claude/commands/epic-cycle.md          # 0 (no CI read takes a single run)
+   grep -cE 'gh run view|(-L|--limit) ?1([^0-9]|$)' _bmad/custom/epic-cycle-unattended.md   # 0 (nor does the doctrine)
+   ```
+   Expected exactly as commented. With `ci=gh`, also run `uv run --no-cache _bmad/scripts/ci-gate.py expected --branch <an epic branch name>`: it lists the workflows a push to an epic branch starts. Show the list to the user. If it names none, CI never runs on epic branches, and each epic will run as `ci=unavailable reason=no_push_trigger`.
+
 3. **No `.toml` carries an `on_complete` hook:**
    ```bash
    grep -l "on_complete" _bmad/custom/bmad-*.toml
@@ -3065,6 +3636,7 @@ The workflow is ready to use. Projects can add custom rules to `_bmad/custom/ski
 
 - **Sequential run — safe at a story boundary.** Upgrade after a story's `committed` entry and before the next `stage_spawned` (or at any stage boundary with a clean tree and no spawn in flight — never while a `bmad-build-auto` / QA / code-review agent is running). The install commit lands on the epic branch (a chore commit under SC-3; it reaches the feature branch at the SC-4 merge). On the next `/epic-cycle` invocation resume does the rest: committed stories are skipped; sprint planning re-runs, so `ledger_load` runs; a story at `cr_complete` without `ledger_adjudicated` resumes at adjudication; an epic whose last story is committed but has no `ledger_burndown_*` entry runs the burn-down gate before `epic_status_done`.
 - **Ledger migration is not optional mid-epic.** `ledger_load` halts on a legacy-grammar ledger, so the Step 1 migration must be part of the upgrade commit. Migrated entries are triaged by class at migration (human-owned and product calls → `decision-pending`, story-closable → `routed owner=burndown`, non-two-way-door LOWs → `wontfix-accepted`); this epic's burn-down gate is therefore the first real drain of the story-closable backlog and may charter a burn-down story (bounded by `burndown_story_max`), and this epic's SC-4 decision sheet is the first time the `decision-pending` entries reach the user — budget for both.
+- **Upgrading to ≥ 2026-10-19.2 (CI with several workflows; field report 2026-10-19).** Sequential runs: safe at a story boundary, attended or during an unattended hold — never under a live run. An orchestrator run follows the parallel kit's rule: never while one is in flight, held epics included. The CI gate used to read one run per commit (`gh run list … -L 1`), so a project with two workflows per push could pass the gate while the other was still running or red. It now reads every workflow a push starts, through `_bmad/scripts/ci-gate.py` (File 10; it needs `uv` and `gh`, as before). Log entries change shape: `committed … runs=<ids>`, `ci_resolved … sha= runs=`, `ci_green_verified runs=`, `merge_gate_blocked … runs=`. An entry written before the upgrade carries `run=<id>`; resolve an open `ci=pending` by its commit with `CI status`, since its single run may be one of several. Re-read the last resolved commit with `CI status` too: a red there predates the next story, so it is inherited, not the next story's. Nothing to migrate. With `ci=gh`, check that `ci-gate.py expected --branch <an epic branch>` lists the workflows you expect. A workflow it marks `required` that never runs on that branch would hold the gate at `pending`: list it under `optional:` in `_bmad/custom/ci-gate.yaml` (project-owned), and report the trigger the script misread.
 - **Upgrading to ≥ 2026-10-19.1 (`--unattended` and `--review`).** Attended runs are unchanged: the doctrine (`_bmad/custom/epic-cycle-unattended.md`) is read only under the new flags. The install writes `_bmad/custom/unattended.yaml` from its template when absent — **review it with the user before the first unattended run**: `owner_only` (what always waits for them), `veto_window` (what the loop decides and reports), `hard_stops`, `milestones` (which define "the release"), `product_defaults`, `owner_fixed` and `stage_preamble` are the project's to set. `.gitignore` gains `_bmad-output/unattended/`. Never upgrade under a live unattended run (Step 1 check 7): hold it first (`bash _bmad/scripts/unattended-inbox.sh <state> hold "upgrade"`, where `<state>` is `_bmad-output/unattended` or, for a parallel run, `<worktree_base>/.coordination/unattended`), wait until the run logs `hold_complete` and `run-status` prints `none`, upgrade, then re-invoke the same command to resume — the resume clears the hold.
 - **Upgrading to ≥ 2026-10-18.1 (the adversarial review of the kit).** Safe at a story boundary; the orchestrator rule below still applies. (1) `ledger.sh` is replaced: drop any local patch to it — this version validates owners correctly on large trackers and non-ASCII keys, stores backslashes verbatim, reads effective state by timestamp, and breaks a crashed claim's counter lock. (2) An entry an earlier run parked on a not-yet-existing X.0 key (`owner=<N>-0-…` written with `LEDGER_OWNER_CHECK=off`) reads `UNKNOWN` at `ledger_load`: re-own it `owner=burndown note=to_x0:<what to decide>`. (3) The pre-flight now compares the resolver's artifact paths with `_bmad/bmm/config.yaml` and halts on a mismatch — align them before the next run. (4) A user-level v7 preview needs `v7_global_accepted:` in `kit-versions.yaml` (re-run Step 1 to record it), or the pre-flight halts. (5) A project whose CI is not GitHub Actions now reads `ci=unavailable` (the merge gate asks you to confirm CI) instead of `ci=none`. (6) Sequential merges now commit their merge record on the feature branch (`chore(epic-N): record merge`); an epic merged under an earlier version with an uncommitted `epic_merged_to_feature` line should have that line committed on the feature branch now.
 - **Upgrading to ≥ 2026-10-14.1 (BMAD 6.12.2; the v7 gate).** BMAD 6.12.2 is a drop-in: no skill text or `customize.toml` changed, so the derived overrides are identical; its helper scripts now write UTF-8 on Windows, and `install --yes` without `--directory` installs into the current directory — `npx bmad-method@6.12 install --action update --modules bmm --tools claude-code --yes` upgrades a project unattended. Its installer now advertises a BMAD v7 preview (`npx skills add bmad-code-org/BMAD-METHOD`, then `bmad setup`). Do not apply it to a project that runs these kits: v7 replaces the review layers, sprint planning and story files they drive, and from this version Step 1 and the command's pre-flight refuse it (BMAD-V7 / V7-GLOBAL). `ledger.sh` now refuses a status outside the Rule 15 grammar (`LEDGER_STATUS_CHECK=off` for a migration), reads a trailer's fields only up to its `note=`, and strips a caller's `note=` prefix; run `LEDGER load` after the upgrade — `status_unknown=` above 0 names entries an earlier typo hid from the status-based gates, and a project that patched these into its own copy can drop the patch. Parallel runs: `parallel.yaml` gains an optional `integrate_conflicts` (absent = `ask`, today's behaviour); a project whose own rule lets runners resolve plain-intent conflicts during integrate-forward sets `resolve-plain` and retires that override. Nothing else to migrate.
@@ -3084,7 +3656,7 @@ The workflow is ready to use. Projects can add custom rules to `_bmad/custom/ski
 
 Record the install: create/update `_bmad/custom/kit-versions.yaml` with `epic-cycle-base: <this document's Kit-Version>` (companions record their own keys: `skill-optimization`, `parallel-epic-cycle`). The parallel kit's upgrade check reads this registry.
 
-**Commit the OUTPUT, completely.** Stage the output set by path and commit it with a message naming the kit version applied — the output set is the installed files (`.claude/commands/epic-cycle.md`, `_bmad/custom/*` including `kit-versions.yaml`, `epic-cycle-unattended.md` and `unattended.yaml`, `_bmad/scripts/ledger.sh`, `_bmad/scripts/unattended-inbox.sh`, `.gitignore`, `.gitattributes`, a migrated ledger + its `.legacy.md` if Step 1 migrated one, `.claude/settings.json` if Step 3b ran, backups), NOT just the kit source documents. Never `git add -A`: it sweeps unrelated work in progress, and any untracked file that is not gitignored (a secret included), into the install commit. On `main`, `master` or `develop`, ask the user before committing there. Verify afterward that `git status --short` lists none of the output files; any other entry is the user's own work, which the next run's clean-tree gate will also stop on — tell them. (Pilot finding 2026-07-11: an upgrade session committed only the kit documents and left every output file dirty.)
+**Commit the OUTPUT, completely.** Stage the output set by path and commit it with a message naming the kit version applied — the output set is the installed files (`.claude/commands/epic-cycle.md`, `_bmad/custom/*` including `kit-versions.yaml`, `epic-cycle-unattended.md` and `unattended.yaml`, `_bmad/scripts/ledger.sh`, `_bmad/scripts/unattended-inbox.sh`, `_bmad/scripts/ci-gate.py`, `.gitignore`, `.gitattributes`, a migrated ledger + its `.legacy.md` if Step 1 migrated one, `.claude/settings.json` if Step 3b ran, backups), NOT just the kit source documents. Never `git add -A`: it sweeps unrelated work in progress, and any untracked file that is not gitignored (a secret included), into the install commit. On `main`, `master` or `develop`, ask the user before committing there. Verify afterward that `git status --short` lists none of the output files; any other entry is the user's own work, which the next run's clean-tree gate will also stop on — tell them. (Pilot finding 2026-07-11: an upgrade session committed only the kit documents and left every output file dirty.)
 
 **⚠️ Tell the user explicitly — session restart required.** A session that has already invoked `/epic-cycle` holds the OLD command text in its context; this install/upgrade takes effect only in NEW sessions and invocations. Instruct the user, verbatim: close this session and any session currently mid-`/epic-cycle`, and start a fresh session before the next `/epic-cycle`.
 
