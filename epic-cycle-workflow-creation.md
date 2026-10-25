@@ -1,6 +1,6 @@
 # Epic Cycle Workflow — Installation Kit
 
-**Kit-Version:** 2026-10-19.3
+**Kit-Version:** 2026-10-25.1
 
 **Requires BMAD Method 6.11.0–6.12.x, not v7** (`_bmad/_config/manifest.yaml` → `installation.version`; 6.12.2 recommended — its helper scripts write UTF-8 on Windows). BMAD v7, which the 6.12.2 installer advertises as a preview, replaces what this kit drives; Step 1 and the command's pre-flight refuse it. This kit drives the v6.11 Phase-4 chain — `bmad-sprint-planning → bmad-build-auto → bmad-code-review` — and its rendered skills need `uv` (Python 3.11+ provisioned by uv) on PATH. For BMAD ≤ 6.10 projects use the last pre-6.11 kit release; do not install this kit there.
 
@@ -286,7 +286,7 @@ The body is written once. Everything after it is an append-only **trailer** of s
 
 ## Rule 16 — Clean tree before every `bmad-build-auto` dispatch (lead/runner, under `/epic-cycle`)
 
-`bmad-build-auto` requires a clean working tree at its step-01 version-control sanity check (HALT on a dirty tree / `version-control metadata not writable`) — that check runs on story-key and intent dispatches (the plan stage); a spec-path dispatch early-exits past it — and it commits only the reviewed-diff files at finalize, then verifies the whole tree is clean (HALT `finalization left repository dirty`). Either way, anything uncommitted when a dispatch starts ends the run. The lead's write-ahead bookkeeping (cycle log, `sprint-status.yaml`, `deferred-work.md`, a freshly planned spec, the epic-context cache, QA's test summary, saved patches) therefore MUST be committed before every dispatch: **write-ahead → bookkeeping commit → spawn.** Bookkeeping commits stage only `_bmad-output/implementation-artifacts/**` (cycle logs, `sprint-status.yaml`, `deferred-work.md`, `spec-*.md`, `epic-*-context.md`, `tests/test-summary.md`, `*.patch`), plus the planning decisions the same commit records — the planning folder's `epics.md` (story insertions, Rule 5 amendments) and the architecture spine's folder (`ARCHITECTURE-SPINE.md`, `.memlog.md`; Rule 20) — and `_bmad/custom/model-overrides.yaml` for a model-tier change — never `.vscode/settings.json`, never source files — land on the epic branch under the SC-3 assertion, and use a `chore(epic-N): bookkeeping <story-id> <stage>` message — committed with an explicit pathspec (`git add -- <paths> && git commit -m … -- <paths>`; the add because a pathspec commit refuses a path git does not know yet, such as a new spec or patch), never a bare `git commit`, so nothing else that happens to be staged rides along. This requires `_bmad-output/implementation-artifacts` to be **tracked** (not gitignored) in the project — the pre-flight checks it. A `blocked` result naming either condition above is a missed bookkeeping commit until proven otherwise — fix the tree, do not re-spawn blindly.
+`bmad-build-auto` requires a clean working tree at its step-01 version-control sanity check (HALT on a dirty tree / `version-control metadata not writable`) — that check runs on story-key and intent dispatches (the plan stage); a spec-path dispatch early-exits past it — and it commits only the reviewed-diff files at finalize, then verifies the whole tree is clean (HALT `finalization left repository dirty`). Either way, anything uncommitted when a dispatch starts ends the run. The lead's write-ahead bookkeeping (cycle log, `sprint-status.yaml`, `deferred-work.md`, a freshly planned spec, the epic-context cache, QA's test summary, saved patches) therefore MUST be committed before every dispatch: **write-ahead → bookkeeping commit → spawn.** Bookkeeping commits stage only `_bmad-output/implementation-artifacts/**` (cycle logs, `sprint-status.yaml`, `deferred-work.md`, `spec-*.md`, `epic-*-context.md`, `tests/test-summary.md`, `*.patch`), plus the planning decisions the same commit records — the planning folder's `epics.md` (story insertions, Rule 5 amendments) and the architecture spine's folder (`ARCHITECTURE-SPINE.md`, `.memlog.md`; Rule 20) — and `_bmad/custom/model-overrides.yaml` for a model-tier or effort change — never `.vscode/settings.json`, never source files — land on the epic branch under the SC-3 assertion, and use a `chore(epic-N): bookkeeping <story-id> <stage>` message — committed with an explicit pathspec (`git add -- <paths> && git commit -m … -- <paths>`; the add because a pathspec commit refuses a path git does not know yet, such as a new spec or patch), never a bare `git commit`, so nothing else that happens to be staged rides along. This requires `_bmad-output/implementation-artifacts` to be **tracked** (not gitignored) in the project — the pre-flight checks it. A `blocked` result naming either condition above is a missed bookkeeping commit until proven otherwise — fix the tree, do not re-spawn blindly.
 
 **The one sanctioned source-file bookkeeping commit — the rework commit.** Before a rework re-dispatch (Rework Loop, Fix Pack, or a failed smoke that re-enters implement), QA's test files and the reviewer's applied patches are still uncommitted source changes (those spawns are forbidden to commit). The lead commits them together with the re-opened spec and the bookkeeping files as `chore(epic-N): rework <story-id> iteration <k>` on the epic branch (SC-3 assertion) so the tree is clean for the dispatch. That commit is part of the story's history, not a violation of this rule. Under `--unattended`, the doctrine's U4 adds two: a set-aside — one forward commit that restores a stopped story's source paths to its `story_base`, its changes saved as a patch — and a pick-up, the forward commit that applies that patch again once the owner has answered.
 
@@ -904,12 +904,12 @@ Each row overrides the command passage it names.
 - **Smoke, fresh-check or AD-tooled verification failure:** the rework path (option b).
 - **Orphan writer or protocol violation** (Rule 18): the orphan protocol, `protocol_violation`; a live writer that cannot be stopped stops that epic (or slot).
 - **Stage API error:** rate limit or overload → the existing backoff with the retry watchdog. Usage or spend limit → a usage hold (U11) if the lead can still act — the stage the limit cut off is dead: its tree is saved as evidence and logged `stage_dead` with the stage to re-run from (U11) — otherwise the session ends, and the resume prompt from the last story boundary carries the run.
-- **Model-tier checkpoint:** evaluate and log; offers are recorded, never applied (`gates.model_tier: record_only`). The mandatory mixed-tier rollback still applies.
+- **Model-tier checkpoint:** evaluate and log; offers are recorded, never applied (`gates.model_tier: record_only`). The mandatory rollbacks (the mixed review tier, a reduced review effort) still apply.
 
 **CI** ("CI Is a Gate")
 - **Red on the story just committed:** the rework path. Unfixable within the cap → stop the story and set it aside (U4).
 - **Red matching a ledgered flake:** one rerun and an `occurrence=` bump; green continues, red takes the rework path.
-- **Infrastructure reds:** re-run each red run `CI status` lists (`gh run rerun <id> --failed`) and watch them — the runs' own duration paces the retries. Three infrastructure reds in a row, or a run still queued or `waiting` for an approval — or a required workflow still without a run (`missing=`), or CI unreadable (`result=unavailable`) — past `ci.queue_minutes` (counted from the push's log entry), → the CI outage rule: resolution point 1 is relaxed for at most `limits.unverified_stories` story — its successor may be committed locally, unpushed. When CI returns, push the stacked heads one at a time, oldest first, resolving each before the next push, so a red is charged to the right story. Blocked past `ci.blocked_hours` → stop the epic. (A red on a story with a stacked successor stops the epic — U4 never sets it aside.)
+- **Infrastructure reds:** re-run each red run `CI status` lists (`gh run rerun <id> --failed`) and watch them — the runs' own duration paces the retries. Three infrastructure reds in a row, or a run still queued or `waiting` for an approval — or a required workflow still without a run (`missing=`), or CI unreadable (`result=unavailable`; not one whose reason begins `CI never judged:` — push what it says, once, as the command's "Reading the result" says, and stop the epic if the new head reads `CI never judged:` again) — past `ci.queue_minutes` (counted from the push's log entry), → the CI outage rule: resolution point 1 is relaxed for at most `limits.unverified_stories` story — its successor may be committed locally, unpushed. When CI returns, push the stacked heads one at a time, oldest first, resolving each before the next push, so a red is charged to the right story. Blocked past `ci.blocked_hours` → stop the epic. (A red on a story with a stacked successor stops the epic — U4 never sets it aside.)
 - **Inherited red:** rerun once. Then one fix-forward story per root cause (keyed by the first red sha, `limits.fix_forward_per_cause`), only if the failing code lies in this epic's own changes (`git diff --name-only <feature>...HEAD`); it is a veto item. Otherwise, or after that, stop the epic.
 - **CI unavailable at the merge gate** (SC-4's "ask the user to confirm CI by hand"), for an epic without readable CI (`ci=unavailable`, or `no_push_trigger`): as chosen at launch — merge on local green, or hold the merge. A `ci=gh` epic whose CI cannot be read is an outage: the CI outage rule, never a merge on local green.
 
@@ -1109,7 +1109,7 @@ veto_window:           # decide now and report; the owner may reverse before the
   - amending an architecture decision (AD), within the bounds of the doctrine's U7
 gates:
   retrospective: headless      # headless | skip (skip for quota-tight runs)
-  model_tier: record_only      # offers are recorded, never applied (tier changes are spend); the mandatory rollback still applies
+  model_tier: record_only      # offers are recorded, never applied (tier and effort changes are spend); the mandatory rollbacks still apply
   merge_to_feature: when_green # when_green | hold
   merge_conflicts: resolve     # resolve | ask. Overrides parallel.yaml integrate_conflicts for the run
   gap_fill: burndown           # burndown | none
@@ -1432,9 +1432,10 @@ expected  the workflows a push of <sha> (default HEAD) to <branch> starts, judge
 status    judges the push that carried <sha>, as GitHub does: the push's whole range decides a paths filter (GitHub's
           push activity names it), and a commit pushed beneath others is judged by that push's head. It lists every
           push run for the judged commit, takes each workflow's latest, and adds each required workflow with no run
-          yet. A paths-filtered workflow this push did not start keeps its latest run on an earlier commit of the
-          branch (`carried`: the code it watches has not changed since) - but for 300 s after the push, and whenever
-          GitHub's decision cannot be known (more than 300 files, a force push), it is waited for instead. First line:
+          yet. A paths-filtered workflow this push did not start keeps its run on the nearest earlier commit that has
+          one (`carried`: this branch's runs first, then any branch's, where a red wins), provided nothing it watches
+          has changed since; one that never ran is checked from the oldest commit whose runs are listed. For 300 s
+          after the push it is waited for instead: GitHub may still start it. First line:
             result=<success|failure|cancelled|pending|untriggered|none|unavailable> sha=<asked> branch= runs=<id,...|none> missing=<path,...|none> via=<sha,...|none>
           `via=` names the other commits the verdict draws on: the push head that carried <sha>, and the commits
           carried runs belong to. Then one line per workflow:
@@ -1446,11 +1447,19 @@ Results and exit codes (act on the `result=` line; uv and Python have exit codes
   cancelled 11   a run was cancelled (and none is red)
   pending 12     a run is queued or running, or a required workflow has no run yet
   none 13        no active workflow runs on a push to this branch at all
-  unavailable 14 gh missing or unauthenticated, an API or network error, a CI-skip token in the commit message, a
-                 broken _bmad/custom/ci-gate.yaml, or any other failure of this script
+  unavailable 14 gh missing or unauthenticated, an API or network error, a broken _bmad/custom/ci-gate.yaml, or any
+                 other failure of this script; or a workflow CI never ran on a change it watches - that reason begins
+                 `CI never judged:` and says which push starts it (a red elsewhere in the verdict still wins)
   untriggered 15 workflows exist, but none has a run on this push or a carried one (nothing they watch ever changed)
 _bmad/custom/ci-gate.yaml (optional, project-owned): `optional: [.github/workflows/<file>, ...]` - workflows the gate
-never waits for (a finished run of one still counts). CI_GATE_GH names a gh-compatible executable (default `gh`).
+never waits for (a finished run of one still counts); `bookkeeping: [<path pattern>, ...]` - paths that count as
+bookkeeping besides `_bmad-output/**`, `_bmad/custom/model-overrides.yaml` and `_bmad/custom/epic-dependencies.yaml`
+(`.github/**` and this file never do). A push whose HEAD commit message carries a CI-skip token ([skip ci] and the
+like; GitHub ignores one on the commits beneath) gives each workflow its latest earlier run, when nothing that
+workflow watches has changed since that run, bookkeeping aside (a workflow whose own `paths:` names a bookkeeping
+path watches it); otherwise it is unavailable (`CI never judged:`). The same check guards every carried run: a
+paths-filtered workflow is never carried across a change it watches but never ran on.
+CI_GATE_GH names a gh-compatible executable (default `gh`).
 """
 import datetime
 import json
@@ -1468,10 +1477,25 @@ GH = os.environ.get("CI_GATE_GH", "gh")
 GREEN = {"success", "skipped", "neutral"}
 CANCELLED = {"cancelled"}
 EXIT = {"success": 0, "failure": 10, "cancelled": 11, "pending": 12, "none": 13, "unavailable": 14, "untriggered": 15}
-SKIP = re.compile(r"\[(skip ci|ci skip|no ci|skip actions|actions skip)\]|^skip-checks: ?true\s*$", re.I | re.M)
+SKIP = re.compile(r"\[(skip ci|ci skip|no ci|skip actions|actions skip)\]", re.I)
+TRAILER = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]*: ?\S.*")
+
+
+def has_skip_token(message):
+    """GitHub skips push workflows when the head commit's message holds one of the bracket tokens, or ends with a
+    trailer block whose last trailer is `skip-checks: true` (or `skip-checks:true`)."""
+    if SKIP.search(message):
+        return True
+    block = re.split(r"\n[ \t]*\n", message.strip())[-1].splitlines()
+    return bool(block) and all(TRAILER.fullmatch(l.strip()) for l in block) and re.fullmatch(r"skip-checks: ?true", block[-1].strip(), re.I) is not None
 CONFIG = "_bmad/custom/ci-gate.yaml"
 ZERO = "0" * 40
-DIFF_LIMIT = 300  # GitHub judges a paths filter on at most 300 changed files; beyond that it may skip the workflow
+BOOKKEEPING = ["_bmad-output/**",                       # BMAD's output folder: logs, trackers, specs, planning
+               "_bmad/custom/model-overrides.yaml",      # model and effort changes (Rule 16)
+               "_bmad/custom/epic-dependencies.yaml"]    # the parallel orchestrator's graph hash re-records
+NEVER_BOOKKEEPING = [".github/**", "_bmad/custom/ci-gate.yaml"]  # what CI runs, and this gate's own rules
+CATCH_ALL_PROBES = ["x", "src/main.py", "a/b/c/d.txt", ".github/workflows/ci.yml"]
+DIFF_LIMIT = 3000  # GitHub judges a paths filter on at most 3,000 changed files; beyond that it may skip the workflow
 WORKFLOW_FILE = re.compile(r"\.github/workflows/[^/]+\.ya?ml")
 FRESH = 300  # seconds after a push in which GitHub may still start a workflow
 
@@ -1603,29 +1627,62 @@ def diff_files(a, b):
     return out if len(out) <= DIFF_LIMIT else None
 
 
+def exists(sha, path):
+    try:
+        return subprocess.run(["git", "cat-file", "-e", f"{sha}:{path}"], capture_output=True, timeout=90).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def changed_since(a, b):
+    """Every path changed between two commits, uncapped (the 300-file limit is GitHub's, for paths filters)."""
+    try:
+        return [f for f in run(["git", "diff-tree", "-r", "--name-only", "-z", "--no-renames", a, b]).split("\0") if f]
+    except Unavailable:
+        return None
+
+
 def commit_files(sha):
     parents = run(["git", "rev-list", "--parents", "-n", "1", sha]).split()[1:]
     return diff_files(parents[0], sha) if parents else None
 
 
-def optional_paths():
+def read_config():
+    """(optional workflow paths, bookkeeping patterns) from the project's _bmad/custom/ci-gate.yaml (optional)."""
     top = run(["git", "rev-parse", "--show-toplevel"]).strip()
     path = os.path.join(top, CONFIG)
     if not os.path.exists(path):
-        return set()
+        return set(), list(BOOKKEEPING)
     try:
         with open(path, encoding="utf-8") as f:
             doc = load_yaml(f.read())
     except (YAMLError, OSError, UnicodeDecodeError) as e:
         raise Unavailable(f"{CONFIG} is unreadable: {str(e).splitlines()[0] if str(e) else type(e).__name__}")
-    items = doc.get("optional") if isinstance(doc, dict) else None
-    good = set()
-    for x in (items if isinstance(items, list) else [] if items in (None, "") else [items]):
+    doc = doc if isinstance(doc, dict) else {}
+    def entries(key):
+        items = doc.get(key)
+        return items if isinstance(items, list) else [] if items in (None, "") else [items]
+    optional, bookkeeping = set(), list(BOOKKEEPING)
+    for x in entries("optional"):
         if isinstance(x, str) and WORKFLOW_FILE.fullmatch(x):
-            good.add(x)
+            optional.add(x)
         else:
             print(f"WARNING: {CONFIG}: optional entry {x!r} is not a .github/workflows/<file>.yml path; ignored", file=sys.stderr)
-    return good
+    for x in entries("bookkeeping"):
+        try:
+            if not isinstance(x, str) or not x.strip():
+                raise ValueError("not a path pattern")
+            pattern_re(x[1:] if x.startswith("!") else x)
+            if not x.startswith("!") and all(matches(f, [x]) for f in CATCH_ALL_PROBES):
+                raise ValueError("it would make every path bookkeeping")
+            bookkeeping.append(x)
+        except ValueError as e:
+            print(f"WARNING: {CONFIG}: bookkeeping entry {x!r} ignored ({e})", file=sys.stderr)
+    return optional, bookkeeping
+
+
+def optional_paths():
+    return read_config()[0]
 
 
 def expected(branch, sha, optional, files):
@@ -1727,7 +1784,8 @@ def repo():
 class Ctx:
     def __init__(self, branch):
         self.branch = branch
-        self.optional = optional_paths()
+        self.optional, self.bookkeeping = read_config()
+        self._branch_runs = self._repo_runs = None
         self.host, self.owner, self.name = repo()
         self.paths, self.states = {}, {}
         for line in self.gh_api(f"repos/{self.owner}/{self.name}/actions/workflows", "--paginate",
@@ -1796,10 +1854,11 @@ class Ctx:
             r["path"] = self.paths.get(wid) or f"workflow-id:{wid}"
         return runs
 
-    def run_list(self, *args):
+    def run_list(self, *args, branch=True):
+        scope = ["--branch", self.branch] if branch else []
         try:
             return self.map_paths(json.loads(run([GH, "run", "list", "-R", f"{self.host}/{self.owner}/{self.name}",
-                                                  "--branch", self.branch, "--event", "push", "-L", "200", *args, "--json",
+                                                  *scope, "--event", "push", "-L", "200", *args, "--json",
                                                   "databaseId,workflowDatabaseId,workflowName,status,conclusion,headSha,createdAt,url"]) or "[]"))
         except ValueError:
             raise Unavailable("gh run list did not return JSON")
@@ -1807,23 +1866,112 @@ class Ctx:
     def runs(self, sha):
         return self.run_list("--commit", sha)
 
+    def branch_runs(self):
+        """{head sha: [runs]} for the branch's latest push runs."""
+        if self._branch_runs is None:
+            self._branch_runs = {}
+            for r in self.run_list():
+                self._branch_runs.setdefault(r.get("headSha"), []).append(r)
+        return self._branch_runs
+
+    def repo_runs(self):
+        """{head sha: [runs]} for the repository's latest push runs, every branch (a fast-forwarded commit's CI ran on
+        the branch it was first pushed to; the run judged the same tree)."""
+        if self._repo_runs is None:
+            self._repo_runs = {}
+            for r in self.run_list(branch=False):
+                self._repo_runs.setdefault(r.get("headSha"), []).append(r)
+        return self._repo_runs
+
+    def runs_at(self, c):
+        """(runs on commit c, from other branches?) - this branch's runs first, else any branch's."""
+        own = self.branch_runs().get(c)
+        return (own, False) if own else (self.repo_runs().get(c) or [], True)
+
+    def oldest_known(self, sha):
+        """The oldest earlier commit (first parents) with push runs listed: every later commit's runs are listed too."""
+        known = [c for c in self.ancestors(sha) if self.runs_at(c)[0]]
+        return known[-1] if known else None
+
+    def ancestors(self, sha):
+        if not run(["git", "rev-list", "--parents", "-n", "1", sha]).split()[1:]:
+            return []
+        return run(["git", "rev-list", "--first-parent", "-n", "200", f"{sha}^"]).split()
+
+    def last_ran(self, sha):
+        """The nearest earlier commit (first parents) that has push runs, or None."""
+        return next((c for c in self.ancestors(sha) if self.runs_at(c)[0]), None)
+
+    def is_bookkeeping(self, f):
+        return matches(f, self.bookkeeping) and not matches(f, NEVER_BOOKKEEPING)
+
+    def unvouched(self, judged, p, since, ran=True):
+        """(why, how to start it) when workflow `p` cannot vouch for `judged` - its run at `since` (ran) or, never having
+        run, the oldest commit whose runs are known - else None. It can when nothing the workflow watches has changed
+        since: bookkeeping aside, unless its own `paths:` filter names a bookkeeping path."""
+        files = changed_since(since, judged)
+        if files is None:
+            return f"the changes since {since[:12]} cannot be listed", START_ANY
+        try:
+            doc = load_yaml(run(["git", "show", f"{judged}:{p}"]))
+        except (Unavailable, YAMLError):
+            return f"{p} cannot be read at {judged[:12]}", START_ANY
+        on = on_block(doc)
+        push = on.get("push") if isinstance(on, dict) else None
+        positive = isinstance(push, dict) and "paths" in push
+        filtered = isinstance(push, dict) and ("paths" in push or "paths-ignore" in push)
+        watched = files if positive else [f for f in files if not self.is_bookkeeping(f)]
+        try:
+            hits = [f for f in watched if push_trigger(doc, self.branch, [f]) == "required"]
+        except ValueError as e:
+            return str(e), START_ANY
+        if not hits:
+            return None
+        what = f"{hits[0]}{f' and {len(hits) - 1} more' if len(hits) > 1 else ''}"
+        when = f"changed since its run at {since[:12]}" if ran else f"changed since {since[:12]}, with no run of it since"
+        return f"{p} never ran on {what}, {when}", (START_PATHS if filtered else START_ANY)
+
     def carried(self, sha, wanted):
-        """{path: (run, from-sha)} - for each wanted workflow, its latest run on the nearest earlier commit of the branch
-        (first parents) that has one. The code a paths filter watches has not changed since that run."""
+        """{path: (run, from-sha)} - for each wanted workflow, its run on the nearest earlier commit (first parents) that
+        has one: this branch's latest, else any branch's, where a red on any branch wins. The caller checks that
+        nothing the workflow watches has changed since (unvouched)."""
         if not wanted or not run(["git", "rev-list", "--parents", "-n", "1", sha]).split()[1:]:
             return {}
-        by_sha = {}
-        for r in self.run_list():
-            by_sha.setdefault(r.get("headSha"), []).append(r)
         found = {}
-        for c in run(["git", "rev-list", "--first-parent", "-n", "200", f"{sha}^"]).split():
-            if c in by_sha:
-                for path, r in latest_by_path(by_sha[c], c).items():
+        for c in self.ancestors(sha):
+            runs, mixed = self.runs_at(c)
+            if runs:
+                for path, r in pick(runs, c, mixed).items():
                     if path in wanted and path not in found:
                         found[path] = (r, c)
             if len(found) == len(wanted):
                 break
         return found
+
+
+def pick(runs, c, mixed):
+    """The latest run of each workflow on commit c; across branches (mixed), a red on any branch wins."""
+    chosen = latest_by_path(runs, c)
+    if mixed:
+        for r in runs:
+            if r.get("headSha") == c and r.get("status") == "completed" and (r.get("conclusion") or "") not in GREEN | CANCELLED:
+                chosen[r["path"]] = r
+    return chosen
+
+
+START_ANY = "push a commit without a CI-skip token (an empty one starts it: git commit --allow-empty)"
+START_PATHS = ("an empty commit does not start it: push a change to a path it watches, without a CI-skip token "
+               "(revert the skipped change and push, then revert the revert and push, each alone)")
+
+
+def refused(rows, exp, states, refusals, prefix=""):
+    """A red outranks a refusal: (result, rows) when the rows are red anyway, else Unavailable naming the first."""
+    rows = rows + [(p, "conditional", None) for p, _, _ in refusals]
+    if result_of(rows, exp, states) == "failure":
+        return rows
+    p, why, how = refusals[0]
+    more = f" (and {len(refusals) - 1} more workflow{'s' if len(refusals) > 2 else ''})" if len(refusals) > 1 else ""
+    raise Unavailable(f"CI never judged: {prefix}{why}{more}; {how}")
 
 
 def epoch(stamp):
@@ -1848,24 +1996,90 @@ def judge(ctx, sha):
     exp = expected(ctx.branch, judged, ctx.optional, files)
     result, rows = verdict(exp, ctx.states, ctx.runs(judged), judged)
     vias = [judged] if judged != sha else []
+    if not any(r for _, _, r in rows) and has_skip_token(run(["git", "log", "-1", "--format=%B", judged])):
+        return skipped(ctx, judged, exp, vias)  # GitHub reads the token on the push's head commit only
     started = {p for p, _, r in rows if r}
     waiting_on = [p for p, k, _ in exp if k == "conditional" and p not in started and ctx.states.get(p, "active") == "active"]
     if waiting_on:
-        fresh = time.time() - pushed_at < FRESH                     # GitHub may still start them
-        unknowable = (exact and files is None) or (push and push["type"] == "force_push")  # >300 files, rewritten history
-        if fresh or unknowable:
+        if time.time() - pushed_at < FRESH:  # GitHub may still start them
             rows += [(p, "conditional", None) for p in waiting_on]
-        else:  # GitHub did not start them: the code they watch is unchanged since their latest run on an earlier push
-            for p, (r, c) in ctx.carried(judged, set(waiting_on)).items():
-                rows.append((p, "carried", r))
-                if c not in vias:
-                    vias.append(c)
+        else:  # GitHub did not start them: carry each one's earlier run when nothing it watches changed since
+            found, refusals = ctx.carried(judged, set(waiting_on)), []
+            since = ctx.oldest_known(judged)
+            for p in waiting_on:
+                if p in found:
+                    r, c = found[p]
+                    bad = ctx.unvouched(judged, p, c)
+                    if not bad:
+                        rows.append((p, "carried", r))
+                        if c not in vias:
+                            vias.append(c)
+                else:
+                    bad = ctx.unvouched(judged, p, since, ran=False) if since else None
+                if bad:  # an earlier push changed what it watches without running it (a skip token, a huge push)
+                    refusals.append((p, *bad))
+            if refusals:
+                rows = refused(rows, exp, ctx.states, refusals)
         result = result_of(rows, exp, ctx.states)
-    if result == "pending" and not any(r for _, _, r in rows):
-        messages = run(["git", "log", "--format=%B", f"{push['before']}..{judged}" if push and push["before"] != ZERO else "-1", judged])
-        if SKIP.search(messages):
-            raise Unavailable("a commit message in the push carries a CI-skip token: GitHub starts no push workflow for it; push a commit without one")
     return result, rows, vias
+
+
+def skipped(ctx, judged, exp, vias):
+    """The push head's message carries a CI-skip token, so GitHub ran nothing for this push. Each workflow keeps its
+    earlier run when nothing it watches, bookkeeping aside, has changed since that run; otherwise CI never judged this
+    code: unavailable, with a reason beginning `CI never judged:` that says how to start the workflow."""
+    prefix = "the push head's message carries a CI-skip token, and "
+    live = {p for p, _, _ in exp if ctx.states.get(p, "active") == "active"}
+    if not live:
+        return result_of([], exp, ctx.states), [], vias  # no workflow runs on a push to this branch: none
+    base = ctx.last_ran(judged)
+    if base is None:
+        if not any(k == "required" and p in live for p, k, _ in exp):
+            return result_of([], exp, ctx.states), [], vias  # nothing a push here starts would have run: untriggered
+        raise Unavailable(f"CI never judged: {prefix}no earlier commit has CI runs; {START_ANY}")
+    base_runs, mixed = ctx.runs_at(base)
+    extras = {p for p in pick(base_runs, base, mixed) if p not in live and runs_here(ctx, judged, p)}
+    found, rows, refusals = ctx.carried(judged, live | extras), [], []
+    for p, k, _ in exp:
+        if k == "required" and p in live and p not in found:
+            refusals.append((p, f"{p} has no earlier run", START_ANY))
+    for p in sorted(found):
+        r, c = found[p]
+        here, then = exists(judged, p), exists(c, p)
+        if p not in live and not here and then:
+            continue  # an extra workflow deleted since its run: nothing runs it here any more
+        if p in live or here:
+            bad = ctx.unvouched(judged, p, c)
+            if bad:
+                refusals.append((p, *bad))
+                continue
+        # an extra with no file in the repository (a dynamic workflow) is carried as it is: its red still counts
+        if p in ctx.optional and r.get("status") != "completed":
+            continue  # never waited for; a finished run still counts
+        rows.append((p, "carried", r))
+        if c not in vias:
+            vias.append(c)
+    since = ctx.oldest_known(judged)
+    for p, k, _ in exp:  # a paths-filtered workflow with no run found: has anything it watches changed since?
+        if k == "conditional" and p in live and p not in found and since:
+            bad = ctx.unvouched(judged, p, since, ran=False)
+            if bad:
+                refusals.append((p, *bad))
+    if refusals:
+        rows = refused(rows, exp, ctx.states, refusals, prefix)
+    return result_of(rows, exp, ctx.states), rows, vias
+
+
+def runs_here(ctx, judged, p):
+    """An extra workflow counts here unless it is disabled, or its file at `judged` never runs on a push to this branch."""
+    if ctx.states.get(p, "active") != "active":
+        return False
+    if not exists(judged, p):
+        return True  # no file in the repository (a dynamic workflow): its runs count as they are
+    try:
+        return push_trigger(load_yaml(run(["git", "show", f"{judged}:{p}"])), ctx.branch, None) is not None
+    except (Unavailable, YAMLError, ValueError):
+        return True
 
 
 def report(result, rows, sha, branch, vias):
@@ -1897,6 +2111,8 @@ def selftest():
         (["*", "!main", "main"], "main", True), (["a\\*b"], "a*b", True), (["a\\*b"], "axb", False),
         (["**/README.md"], "README.md", True), (["**/README.md"], "docs/x/README.md", True), (["**/*-post.md"], "my-post.md", True),
         (["**/PROJ-epic*"], "PROJ-epic1", True), (["a*+"], "a+", True), (["a*+"], "ab", False),
+        (BOOKKEEPING, "_bmad-output/implementation-artifacts/cycle-log-epic-1.md", True), (BOOKKEEPING, "src/_bmad-output.py", False),
+        (BOOKKEEPING + ["tools/ci-timings.json"], "tools/ci-timings.json", True),
     ]:
         check(f"matches({pats}, {name})", matches(name, pats), want)
     try:
@@ -1923,6 +2139,12 @@ def selftest():
     ]:
         check(f"push_trigger({text!r}, {branch}, {files})", push_trigger(load_yaml(text), branch, files), want)
     check("on_block(YAML 1.1 True key)", push_trigger({True: "push"}, "x", None), "required")
+    for msg, want in [("chore: log [skip ci]", True), ("fix\n\nskip-checks: true", True), ("skip-checks:true", True),
+                      ("fix\n\nCo-Authored-By: A <a@b.c>\nskip-checks: true", True),
+                      ("fix\n\nskip-checks: true\nCo-Authored-By: A <a@b.c>", False),
+                      ("skip-checks: true, said nobody\nmore text", False), ("fix\n\nskip-checks: true\n\nmore", False),
+                      ("docs: the [ci] tag", False)]:
+        check(f"has_skip_token({msg!r})", has_skip_token(msg), want)
 
     alias = lambda h: "github.com" if h == "gh-work" else h
     for url, want in [
@@ -2066,7 +2288,7 @@ If `Agent` is a deferred tool, load its schema via `ToolSearch` with `"select:Ag
 
 **Unattended run lock (attended runs — under `--unattended` the doctrine's U2 decides instead, and a runner skips this):** if `_bmad-output/unattended/run.lock` or `<worktree_base>/.coordination/unattended/run.lock` exists, an unattended run may hold this checkout — show `bash _bmad/scripts/unattended-inbox.sh <its directory> run-status` and stop; only the owner can confirm that run is dead and release its lock (doctrine U10, last bullet). Two sessions never work one checkout.
 
-**Telemetry gate (third action):** scan every existing `cycle-log-epic-*.md` for `model_tier_checkpoint` entries whose `result` is `recommend_escalate` or `offer_mixed` with `applied=false`. If any exist, surface them once before starting ("Epic N's checkpoint recommended escalating `implement` to Opus (evidence …); no policy file exists / the user declined — apply now, or continue as is?") and log `telemetry_gate pending=<N>`. Accumulated telemetry that nobody acts on is the failure mode this gate exists for.
+**Telemetry gate (third action):** scan every existing `cycle-log-epic-*.md` for `model_tier_checkpoint` entries whose `result` is `recommend_escalate`, `offer_mixed`, `recommend_effort_raise` or `offer_effort_lower` with `applied=false`. If any exist, surface them once before starting ("Epic N's checkpoint recommended escalating `implement` to Opus, or raising its effort (evidence …); no policy file exists / the user declined — apply now, or continue as is?") and log `telemetry_gate pending=<N>`. Accumulated telemetry that nobody acts on is the failure mode this gate exists for.
 
 **`SPRINT_PLAN` shorthand.** Throughout this command, `SPRINT_PLAN` means `uv run --no-cache <path-to>/bmad-sprint-planning/scripts/sprint_plan.py`, where `<path-to>` is `.claude/skills` (or the plugin-namespaced skills directory). Three more placeholders recur below: `<impl>` and `<planning>` (also written `<implementation_artifacts>` / `<planning_artifacts>`) and `<project_name>`. Resolve all three once, at pre-flight, through BMAD's own resolver — `uv run --no-cache _bmad/scripts/resolve_config.py --project-root <abs-root> --key core.project_name --key modules.bmm.implementation_artifacts --key modules.bmm.planning_artifacts` (JSON out) — and substitute `{project-root}`; by default they are `_bmad-output/implementation-artifacts` and `_bmad-output/planning-artifacts`. Never read them from `_bmad/config.toml` alone: the resolver merges the project's config layers (`_bmad/config.toml`, `_bmad/custom/config.toml`, and the user files), as the rendered skills (`bmad-build-auto`) do. Four pipeline skills do not: `bmad-code-review`, `bmad-qa-generate-e2e-tests`, `bmad-sprint-planning` and `bmad-retrospective` read `_bmad/bmm/config.yaml`. So compare: the resolver's `implementation_artifacts` and `planning_artifacts` must equal those keys in `_bmad/bmm/config.yaml` (after substituting `{project-root}`); a mismatch → HALT — those four skills would write somewhere other than the lead and build-auto. Align the two (re-run the BMAD installer, or set the path in both files) and re-invoke. It is BMAD's deterministic tracker script (JSON in, JSON out; `uv run` may print an `Installed N package(s)` line to stderr — ignore it). Its three subcommands replace the retired `/bmad-sprint-status mode=data|validate`:
 
@@ -2107,7 +2329,7 @@ A story therefore produces several commits on the epic branch: bookkeeping commi
 
 1. **Lead** runs the **burn-down gate** (Rule 17, see "Ledger Drain"): every story-closable (`routed`/`open`) ledger entry owned by `burndown` or by one of this epic's story keys is resolved / made terminal now, chartered into ONE burn-down story `N.<M+1>` (M = the highest existing story number under Epic N in `epics.md` or `sprint-status.yaml`; at most `burndown_story_max` entries, by priority) that runs the full per-story pipeline before the epic closes, or — the explicit overflow — re-owned to a specific next-epic story key. `escalated` / `decision-pending` entries are not work: they are counted and handed to the decision sheet (step 5). Logs `ledger_burndown_complete` (or `ledger_burndown_skipped reason=empty`).
 2. **Lead** sets `epic-{N}: done` via `SPRINT_PLAN generate --set epic-{N}=done` — a transition no skill writes (see "Status Ownership") — and logs `epic_status_done`.
-3. **Lead** runs the model-tier checkpoint on EVERY project (see "Model Strategy") and logs `model_tier_checkpoint` with its evaluation; a change to tiers is applied only when `_bmad/custom/model-overrides.yaml` exists and the user approves (then also `model_tier_changed`) — on a project without the policy file a met threshold is surfaced as a recommendation, never silently dropped.
+3. **Lead** runs the model-tier checkpoint on EVERY project (see "Model Strategy") and logs `model_tier_checkpoint` with its evaluation; a change to tiers or efforts is applied only when `_bmad/custom/model-overrides.yaml` exists and the user approves (then also `model_tier_changed` or `effort_changed`) — on a project without the policy file a met threshold is surfaced as a recommendation, never silently dropped.
 4. **Lead** pauses: "Run a retrospective?" If yes, execute `/bmad-retrospective` fully interactive — the human-in-the-middle exception; see "Retrospective Per Epic".
 5. **Lead** presents the **epic-close decision sheet** (Rule 17 (5): every `escalated` and `decision-pending` entry with a recommended disposition, decided in one sitting; human-owned items move to `action_items`), records the answers as `by=merge_gate` trailer lines, logs `decision_sheet_recorded`, and then pauses: "Merge `{TICKET}-epic{N}` into the feature branch and delete the epic branch (local + remote)?" — per Rule SC-4. If yes, execute the merge in each affected repo (submodules-first, parent last).
 
@@ -2152,6 +2374,26 @@ On an **unpinned** project the map is the operative source. On a **pinned** proj
 
 **Upstream levers (v6.11):** `bmad-build-auto`'s `implementation_handoff` and every skill's `review_layers[].instruction` are free-prose overrides in `_bmad/custom/<skill>.toml` — the sanctioned way to route one internal subagent to another model or an external tool. `/epic-cycle` does not need them (it passes `model` on the stage spawn), but a project that must run the implement stage inline (e.g. a runner without nested-spawn headroom) can put `model: sonnet` into the handoff prose there.
 
+### Reasoning effort per stage
+
+Each spawn also carries a reasoning effort: the `Agent` tool's `effort` parameter, `low` | `medium` | `high` | `xhigh` | `max`. The kit's map:
+
+| Spawn | Effort | Why |
+| --- | --- | --- |
+| Plan | `high` | The spec drives everything after it, and a planning gap still meets spec validation and a full review: `xhigh` here is mostly extra spend. |
+| Implement | `high` | An independent review at a higher effort catches what the implementer misses. Field report 2026-10-25: moving the implement stage from `xhigh` to `high` cut its output by about 60% and shortened stories, and every extra defect it let through was caught at review. |
+| QA | `high` | Tests guard every later change, and their output is small. |
+| Code review | `xhigh` | The gate that catches what the implementer missed. `max` costs much more for little gain. |
+| Runner (parallel kit) | `high` | A runner leads its epic: spec validation, the smoke and AD checks, merge-conflict decisions. |
+
+- **Nested agents inherit it.** An explicit effort on a spawn carries down to every agent spawned beneath it that sets none, and it overrides the per-model `effortLevel` in Claude Code's settings. (Verified 2026-10-25: a stage spawned at `low` ran its nested Sonnet and Opus agents at `low`, though the settings said `high` and `xhigh`.) So the code-review stage's review layers, and `bmad-build-auto`'s handoff and self-review agents, run at their stage's effort. No BMAD change is needed.
+- **So every stage spawn passes its effort explicitly**, above all under a runner: a stage spawned without one would take the runner's.
+- **A project changes any row** in the `effort:` map of `_bmad/custom/model-overrides.yaml` (below). `inherit` on a row omits the parameter for that spawn. `effort: inherit` turns the whole map off, the `runner` row included: no spawn passes `effort`, and every agent runs at its model's settings, as before this version. Under a runner whose row is set, an `inherit` stage takes the runner's effort.
+- **Code review never runs below the implement stage's effort.** A lower setting is raised to implement's, and recorded as `effort_raised=implement` on its `stage_spawned`. Compare resolved levels: under a runner an `inherit` row is the runner's level; in a sequential run an `inherit` row has no level the kit knows, so the guard, the rollback and the offers apply only to rows set to a level.
+- **`stage_spawned` records what ran:** `effort=<level>`; `effort=inherit` in a sequential run; `effort=runner:<level>` for an `inherit` stage under a runner, and for inline build-auto (the parallel kit).
+- **The lead's and the orchestrator's own effort is the session's** (Claude Code's settings, or `/effort`); the kit cannot set it. They make the inline judgment calls (spec validation, AD verifications, the smoke, the merge gate), so run them at `high` or above.
+- Pass `effort` only where the `Agent` tool's schema offers it, as with `name`. A Claude Code without the parameter runs every stage at its settings' level, and `stage_spawned` records `effort=inherit`.
+
 ### Project model-policy file (`_bmad/custom/model-overrides.yaml`, optional — highest priority)
 
 A project-local re-pin surface that survives BMAD upgrades (the installer never touches `_bmad/custom/`). When present, model resolution becomes: **overrides file → frontmatter → stage map → inherit**. Schema:
@@ -2162,6 +2404,8 @@ stack_risk: uncommon            # uncommon | standard (default). uncommon arms t
 review_tier: full-opus          # full-opus (default) | mixed — controls bmad-code-review's internal review layers
 overrides:                      # optional: STAGE -> tier re-pins (plan | implement | qa | code-review)
   implement: opus               # bmad-build-auto implement stage (plan stays at its own key)
+effort:                         # optional: SPAWN -> reasoning effort (plan | implement | qa | code-review | runner)
+  plan: medium                  # low | medium | high | xhigh | max | inherit; `effort: inherit` turns the kit's map off
 history:                        # append-only; every change records its evidence
   - date: 2026-07-19
     action: escalate-implement-to-opus
@@ -2169,7 +2413,7 @@ history:                        # append-only; every change records its evidence
     approved_by: user
 ```
 
-Keys are **stages**, not skills, because `bmad-build-auto` serves two stages at two tiers. (Pre-6.11 policy files keyed `bmad-dev-story` / `bmad-quick-dev` / `bmad-qa-generate-e2e-tests`: read them as `implement` / `implement` / `qa` and offer to rewrite the file once.)
+Keys are **stages**, not skills, because `bmad-build-auto` serves two stages at two tiers. Effort resolves the same way, without frontmatter: **the `effort:` map → the kit's map** ("Reasoning effort per stage"). A key outside `plan|implement|qa|code-review|runner`, a value outside `low|medium|high|xhigh|max|inherit`, or an `effort:` that is neither a map nor `inherit` is warned about once per run (`effort_unknown key=<k> value=<v>`, epic-level; skip it when the log already has one), and the kit's value is used. The orchestrator checks the `runner` row the same way. (Pre-6.11 policy files keyed `bmad-dev-story` / `bmad-quick-dev` / `bmad-qa-generate-e2e-tests`: read them as `implement` / `implement` / `qa` and offer to rewrite the file once.)
 
 ### Model-tier checkpoint (end of epic, lead-side)
 
@@ -2178,8 +2422,11 @@ Keys are **stages**, not skills, because `bmad-build-auto` serves two stages at 
 - **Escalation (uncommon stack):** if mean `cr_complete` **`unresolved_high_med`** ≥ 2 per story with the implement stage on a Sonnet-tier model — the high+med root-cause entries the reviewer could not resolve in its own pass, i.e. what escaped both the implementer and the reviewer's patches; NOT the gross `high+med` found, which a four-layer adversarial review scores at 7–10 on stories that need one pass (field report 2026-09-11: 8, 7 and 10 on three one-pass stories against a threshold of 2 — the metric did not discriminate) — OR ≥ 2 stories entered the rework loop for language-semantics defects, OR ≥ 2 stories' `dev_complete` show `review_loop_iteration ≥ 3` (build-auto's own bad-spec/patch loop thrashing) → recommend re-pinning `implement` / `qa` to `opus` for this project. Surface the evidence to the user; on approval, update `overrides:` + `history:`. Rationale: two rework iterations (extra Sonnet dev + extra Opus review) cost more than Opus-dev. Counts are root-cause entries after the reviewer's grouping (`rows=` is raw layer volume and never a threshold input); a `cr_complete` from before Kit-Version 2026-09-11.1 lacks `unresolved_high_med` — fall back to `high+med` for that story and log `metric=gross` on the checkpoint so the reading is known to be inflated.
 - **De-escalation offer (review layers):** after ≥ 2 consecutive epics with zero high and ≤ 1 medium finding per epic from Opus-tier review, the lead MAY offer `review_tier: mixed` (`blind-hunter` / `edge-case-hunter` / `verification-gap` → sonnet; `acceptance-auditor` stays at the parent model; never below the implementation tier).
 - **Rollback (mandatory, not user-gated):** if `review_tier: mixed` is active and any `smoke_complete` in this epic recorded `defects_caught>0`, revert to `full-opus` immediately and record it.
+- **Effort before a re-pin:** wherever the escalation evidence above is met, recommend raising `implement` and `qa` one effort level first, to at most `xhigh` (`result=recommend_effort_raise`). It is cheaper than a model re-pin; re-pin only if the next epic still meets the threshold at the raised effort.
+- **Effort reduction offer:** after the same streak as the review-tier offer (≥ 2 consecutive epics with zero high and ≤ 1 medium finding from review), the lead MAY offer lowering `plan`, `implement` or `qa` one level (`result=offer_effort_lower`), and `runner` only while it stays at `high` or above. Never `code-review`: it is the guard.
+- **Effort rollback (mandatory, not user-gated):** if `code-review` is set below the kit's value and any `smoke_complete` in this epic recorded `defects_caught>0`, restore the kit's value immediately and record it (`result=effort_revert_required`; `effort_changed direction=revert approved_by=mandatory_rollback`). Under the parallel kit a runner's checkpoint change lands in the main checkout with its epic's merge, so it reaches the other runners' next spawns from then on.
 
-**Telemetry is mandatory:** every evaluation logs `model_tier_checkpoint`; every change to model-overrides.yaml logs `model_tier_changed` with `direction=`, `stages=`, `from=`, `to=`, `reason=`, and `evidence=` (see Workflow Telemetry). A tier change absent from the cycle log did not happen — never edit the policy file without the paired log entry and matching `history:` record.
+**Telemetry is mandatory:** every evaluation logs `model_tier_checkpoint` (its evaluation covers effort too); every change to the `effort:` map logs `effort_changed`; every change to model-overrides.yaml's tiers logs `model_tier_changed` with `direction=`, `stages=`, `from=`, `to=`, `reason=`, and `evidence=` (see Workflow Telemetry). A tier change absent from the cycle log did not happen — never edit the policy file without the paired log entry and matching `history:` record.
 
 Lead-run gate skills (sprint planning, retrospective) and lead-side gates (spec validation, AD verifications, smoke, merge-conflict decisions) execute inline on the lead's model — run the lead on an Opus-tier model so those judgment calls get maximum quality. Story planning is a spawned Opus stage, so it is tier-guaranteed independently of the lead.
 
@@ -2193,10 +2440,11 @@ Each pipeline-stage subagent is a single `Agent` tool call. The `Agent` tool ret
 
 For each pipeline stage, the lead:
 
-1. **Resolves the stage's model.** Resolution order: (a) if `_bmad/custom/model-overrides.yaml` exists and its `overrides:` map names the **stage** (`plan` | `implement` | `qa` | `code-review`), that wins unconditionally (project model policy — see Model Strategy); (b) else if the stage skill's YAML frontmatter — `.claude/skills/<skill-name>/SKILL.md`, or the plugin-namespaced install path — declares a `model:` field (e.g. `opus` / `sonnet` / `haiku`), that wins for every stage except `implement` (a `bmad-build-auto` pin documents the plan tier only); (c) otherwise use the Model Strategy map above (plan → `opus`, implement → `sonnet`, qa → `sonnet`, code-review → `opus`); (d) for a stage not in the map, omit the parameter and let the sub-agent inherit the lead's model. Read the actual file and frontmatter — do not assume. On a vanilla BMAD install (c) is the operative source (upstream v6.11 still ships no `model:` frontmatter); projects that ran a model-pinning pass over their skills resolve via (b), and the pins normally agree with the map.
-2. **Writes the `stage_spawned` entry** (`stage=<plan|implement|qa|code-review> spawn_at=<UTC> model=<resolved> agent_name=<name passed on the Agent call> cycle_iteration=N`; a story's first implement spawn — and, under `--unattended`, its first after a set-aside or a re-plan — also carries `story_base=<HEAD sha>`) to the cycle log IMMEDIATELY before the call — never after. Then, if the stage is `bmad-build-auto`, **ensures the tree is clean** (Rule 16): every pending bookkeeping write including this entry is committed first; `git status --short` must be empty in the stage's working directory (and in every mounted submodule) — the one exception is the review-step intent-gap patch re-dispatch (re-dispatch protocol, step 2), whose applied patch stays uncommitted by design. An open `stage_spawned` (no closing success entry, no `<stage>_clarification_requested`) is the only durable evidence that a stage may be in flight — resume reads it before any re-dispatch.
+1. **Resolves the stage's model and effort.** Effort: the `effort:` map of `_bmad/custom/model-overrides.yaml`, else the kit's map ("Reasoning effort per stage"), with code review raised to implement's if it is lower. Read the file at every spawn, so a change made at a hold applies to the next spawn; under the parallel kit a runner reads the main checkout's copy. A row that differs from the effort the last `stage_spawned` of that stage recorded, with no `effort_changed` since, was edited by hand: log `effort_changed reason=hand_edit approved_by=user` before the spawn. Model resolution order: (a) if `_bmad/custom/model-overrides.yaml` exists and its `overrides:` map names the **stage** (`plan` | `implement` | `qa` | `code-review`), that wins unconditionally (project model policy — see Model Strategy); (b) else if the stage skill's YAML frontmatter — `.claude/skills/<skill-name>/SKILL.md`, or the plugin-namespaced install path — declares a `model:` field (e.g. `opus` / `sonnet` / `haiku`), that wins for every stage except `implement` (a `bmad-build-auto` pin documents the plan tier only); (c) otherwise use the Model Strategy map above (plan → `opus`, implement → `sonnet`, qa → `sonnet`, code-review → `opus`); (d) for a stage not in the map, omit the parameter and let the sub-agent inherit the lead's model. Read the actual file and frontmatter — do not assume. On a vanilla BMAD install (c) is the operative source (upstream v6.11 still ships no `model:` frontmatter); projects that ran a model-pinning pass over their skills resolve via (b), and the pins normally agree with the map.
+2. **Writes the `stage_spawned` entry** (`stage=<plan|implement|qa|code-review> spawn_at=<UTC> model=<resolved> effort=<resolved|inherit> agent_name=<name passed on the Agent call> cycle_iteration=N`; a story's first implement spawn — and, under `--unattended`, its first after a set-aside or a re-plan — also carries `story_base=<HEAD sha>`) to the cycle log IMMEDIATELY before the call — never after. Then, if the stage is `bmad-build-auto`, **ensures the tree is clean** (Rule 16): every pending bookkeeping write including this entry is committed first; `git status --short` must be empty in the stage's working directory (and in every mounted submodule) — the one exception is the review-step intent-gap patch re-dispatch (re-dispatch protocol, step 2), whose applied patch stays uncommitted by design. An open `stage_spawned` (no closing success entry, no `<stage>_clarification_requested`) is the only durable evidence that a stage may be in flight — resume reads it before any re-dispatch.
 3. **Spawns** the subagent via `Agent` with `name: "<story-key>-<stage>-<iteration>"` (the `agent_name` recorded above — pass `name` only when the tool's schema offers it; the log entry identifies the stage either way) and:
    - `subagent_type: "general-purpose"` (required for `bmad-build-auto` stages — they spawn their own subagents)
+   - `effort: <the effort resolved in step 1>` — where the tool's schema offers it; omit it only for `inherit`. Nested agents inherit it ("Reasoning effort per stage").
    - `model: <the model resolved in step 1>` — pass this so the stage runs on the model the pipeline intends, NOT the lead's inherited model. Omit the parameter only when step 1 resolved nothing (stage not in the map and no frontmatter declaration).
    - `mode: "bypassPermissions"` — only when the `Agent` schema offers `mode` (see Permission Mode); omit it where the schema has none
    - `run_in_background: false` — always explicit, never omitted (Rule 18 (5)): the harness default may be background, and a backgrounded stage returns at once while its work runs on with no supervisor
@@ -2468,7 +2716,7 @@ For each epic in range:
   For each story, strictly sequentially, starting from the resume point:
     If any file in planning_artifacts is newer than epic-{N}-context.md → re-run the pre-warm + bookkeeping commit first
     Lead asserts current branch == {TICKET}-epic{N} in every affected repo; halts on mismatch
-    Lead writes stage_spawned (stage= spawn_at= model= agent_name= cycle_iteration=) IMMEDIATELY BEFORE each Agent call —
+    Lead writes stage_spawned (stage= spawn_at= model= effort= agent_name= cycle_iteration=) IMMEDIATELY BEFORE each Agent call —
       for build-auto stages inside the bookkeeping commit that precedes the spawn; closed by the stage's success entry or a clarification entry
 
     # --- PLAN (Opus) ---
@@ -2521,8 +2769,8 @@ For each epic in range:
             logs ledger_burndown_complete open_before= resolved= terminal= chartered= chartered_size= overflow= reowned= to_decision_sheet= open_after= cap= story_max= filed_this_epic= closed_this_epic= drain_ratio=
   Lead: SPRINT_PLAN generate --set epic-{N}=done (no skill writes this transition); bookkeeping commit; logs epic_status_done
   Lead evaluates this epic's cycle log against the escalation / de-escalation / rollback thresholds — EVERY project; logs model_tier_checkpoint armed=<bool> result=…
-    result=recommend_escalate|offer_mixed → surface evidence to the user; on approval (creating model-overrides.yaml if absent): update overrides+history; logs model_tier_changed   # Unattended: recorded, never applied (U5)
-    result=revert_required (mixed active, smoke defects) → mandatory: update the file; logs model_tier_changed
+    result=recommend_effort_raise|recommend_escalate|offer_mixed|offer_effort_lower → surface evidence to the user (an effort raise comes before a re-pin); on approval (creating model-overrides.yaml if absent): update overrides or effort + history; logs model_tier_changed or effort_changed   # Unattended: recorded, never applied (U5)
+    result=revert_required (mixed active, smoke defects) | effort_revert_required (review effort reduced, smoke defects) → mandatory: update the file; logs model_tier_changed / effort_changed approved_by=mandatory_rollback
   Lead pauses: "Run a retrospective?"   # human-in-the-middle gate — never auto-answered, never times out into a default (Unattended: headless -H <epic>, verdict read; U9)
     If yes → /bmad-retrospective via Skill tool, fully interactive (all WAITs reach the user), with the burn-down counts in its argument; logs epic_retro_complete
     If no  → logs epic_retro_skipped reason=user_declined
@@ -2618,7 +2866,7 @@ The smoke is not a substitute for automated tiers; it's the final check that the
 
 Every quality gate in this pipeline runs the suite locally; none of them is the platform the project ships from. The CI run a push starts is therefore a first-class result, recorded write-ahead and resolved before the next irreversible step — never awaited per story (wall-clock), never assumed green.
 
-**`CI`** means `uv run --no-cache _bmad/scripts/ci-gate.py` (installed by the kit). A project may run several workflows per push (field report 2026-10-19: `ci` and `lane-a`), and the gate is every one of them. Never read a single run with a limit of 1: it returns whichever workflow registered first. `CI status --branch <branch> --sha <sha>` reads every push run for that exact commit and takes each workflow's latest. It also adds each workflow that, by the commit's own workflow files, a push to that branch starts but that has no run yet. It judges the push, as GitHub does, and GitHub's push activity names the push's range: a `paths` filter is judged on the whole push, a commit pushed beneath others is judged by its push's head, and a `paths`-filtered workflow the push did not start keeps the result of its own latest run on an earlier commit of the branch (the code it watches has not changed since). For 300 seconds after a push, and whenever GitHub's decision cannot be known (more than 300 changed files, a force push), such a workflow is waited for instead (`pending`): GitHub may still start it. It prints `result=<…> sha= branch= runs=<ids> missing=<paths> via=<sha|none>`, then one line per workflow (run id, status, conclusion, link); `via=` names the other commits the verdict draws on: the push head that carried the commit asked about, and the commits whose runs were carried. `CI expected --branch <branch>` lists the workflows alone. Ask only about a pushed commit (`git merge-base --is-ancestor <sha> origin/<branch>` after a fetch): for a commit that never reached origin, `missing` means not pushed, not not-yet-registered. Only push-triggered workflows are gated: one that another workflow's completion starts (`workflow_run`) is not. A workflow the gate must never wait for (one held for a manual approval, say) goes in the project-owned `_bmad/custom/ci-gate.yaml` as `optional: [.github/workflows/<file>]`; a finished run of it still counts.
+**`CI`** means `uv run --no-cache _bmad/scripts/ci-gate.py` (installed by the kit). A project may run several workflows per push (field report 2026-10-19: two workflows on every push), and the gate is every one of them. Never read a single run with a limit of 1: it returns whichever workflow registered first. `CI status --branch <branch> --sha <sha>` reads every push run for that exact commit and takes each workflow's latest. It also adds each workflow that, by the commit's own workflow files, a push to that branch starts but that has no run yet. It judges the push, as GitHub does, and GitHub's push activity names the push's range: a `paths` filter is judged on the whole push, a commit pushed beneath others is judged by its push's head, and a `paths`-filtered workflow the push did not start keeps the result of its run on the nearest earlier commit that has one (`carried`: this branch's runs on that commit first, else any branch's, where a red wins), provided nothing it watches has changed since that run. One that never ran is checked from the oldest commit whose runs are listed. A workflow that never ran on a change it watches — a CI-skip push, or a push of more than 3,000 files, whose `paths` filter GitHub may skip — is never carried: the result is `unavailable`, with a reason beginning `CI never judged:`. For 300 seconds after a push, such a workflow is waited for instead (`pending`): GitHub may still start it. It prints `result=<…> sha= branch= runs=<ids> missing=<paths> via=<sha|none>`, then one line per workflow (run id, status, conclusion, link); `via=` names the other commits the verdict draws on: the push head that carried the commit asked about, and the commits whose runs were carried. `CI expected --branch <branch>` lists the workflows alone. Ask only about a pushed commit (`git merge-base --is-ancestor <sha> origin/<branch>` after a fetch): for a commit that never reached origin, `missing` means not pushed, not not-yet-registered. Only push-triggered workflows are gated: one that another workflow's completion starts (`workflow_run`) is not. A workflow the gate must never wait for (one held for a manual approval, say) goes in the project-owned `_bmad/custom/ci-gate.yaml` as `optional: [.github/workflows/<file>]`; a finished run of it still counts. The same file's `bookkeeping:` list names the paths, besides the defaults (**At `committed`**, below), that a CI-skip push may change.
 
 **Reading the result** — always the first line's `result=`, never the exit code alone: `uv` and Python have exit codes of their own, and output with no `result=` line counts as `unavailable`.
 - `success` — every run green (`skipped` and `neutral` count as green). Exit 0.
@@ -2627,7 +2875,7 @@ Every quality gate in this pipeline runs the suite locally; none of them is the 
 - `pending` — a run queued or running, or a required workflow with no run yet (`missing=`): wait. Exit 12.
 - `untriggered` — workflows exist, but no push up to this commit ever started one: each changed nothing a `paths` filter watches. It passes like `success`, logged as `untriggered`. Exit 15.
 - `none` — no active workflow runs on a push to this branch at all (every one disabled counts). On an epic branch, the epic runs as `ci=unavailable reason=no_push_trigger`, as the per-epic check would have found. On the feature branch it passes, logged as `none`: the feature head is a merge of CI-verified epic heads. It is not the pre-flight's `ci=none`, a project without CI. Exit 13.
-- `unavailable` — `gh` missing or unauthenticated, an API or network error, or a CI-skip token in the commit message (the reason says which): retry about a minute apart, three times, then treat it as an infrastructure outage (surface it; *Unattended:* U5's CI outage rule). Exit 14.
+- `unavailable` — `gh` missing or unauthenticated, or an API or network error: retry about a minute apart, three times, then treat it as an infrastructure outage (surface it; *Unattended:* U5's CI outage rule). A reason beginning `CI never judged:` is no outage, and no retry changes it: a workflow never ran on a change it watches. The reason names the workflow and the push that starts it. Without a `paths` filter, an empty commit does (`git commit --allow-empty -m "ci: run CI on <sha>"`, then push). A `paths`-filtered workflow ignores an empty commit: revert the change it never ran on and push, then revert the revert and push, each push alone and without a CI-skip token. Gate the new head instead. Try it once: if the new head reads `CI never judged:` again, surface it (*Unattended:* U5 stops the epic). Exit 14.
 
 **Pre-flight (once per run, on `runtime_gate`):** `ci=gh` when `.github/workflows/` holds a `*.yml` or `*.yaml` workflow, `gh auth status` succeeds, and `origin` is a GitHub remote (each epic then checks that a workflow runs on a push to its branch — below); `ci=none` only when the repo has no CI configuration at all (no GitHub workflow and none of `.gitlab-ci.yml`, `azure-pipelines.yml`, `.circleci/config.yml`, `Jenkinsfile`, `bitbucket-pipelines.yml`, `.buildkite/`, `.travis.yml`, `.drone.yml`); `ci=unavailable` when CI exists but its results cannot be read here — `gh` missing or unauthenticated, a non-GitHub remote, or another CI system — surface `unavailable` once ("CI results cannot be read from this session; the merge gate will ask you to confirm CI by hand") rather than silently skipping.
 
@@ -2635,7 +2883,7 @@ Every quality gate in this pipeline runs the suite locally; none of them is the 
 
 **Per epic, once its branch is named** (Task Sequence step 4): with `ci=gh`, `CI expected --branch {TICKET}-epic{N}` must list a workflow. If it lists none, no workflow runs on a push to the epic branch: the epic runs as `ci=unavailable reason=no_push_trigger` (on its `epic_branch_checked_out` entry), surfaced once — "no workflow runs on a push to `{TICKET}-epic{N}`; the merge gate will ask you to confirm CI by hand" (*Unattended:* the first epic's check runs in the attended setup, U2; a later epic follows `ci.without_ci`, or stops if it is empty).
 
-**At `committed`:** after the push, `CI status --branch {TICKET}-epic{N} --sha <sha>` (retry a few times over ~30 s while it reports a workflow `missing` — runs register shortly after the push); record `ci=pending runs=<ids>` — always `pending`, even when every listed run has finished: a `paths`-filtered workflow may register later, and resolution point 1 re-reads them all (`ci=none` / `ci=unavailable` per pre-flight). No waiting. Push the code commit on its own and confirm every workflow's run registered for that exact sha (`missing=none`) before any further push to the branch — a workflow with `concurrency: cancel-in-progress` cancels the run being waited on when a later push lands. Never put a CI-skip token in a code commit's message: a quoted `[skip ci]` skips the run all the same.
+**At `committed`:** after the push, `CI status --branch {TICKET}-epic{N} --sha <sha>` (retry a few times over ~30 s while it reports a workflow `missing` — runs register shortly after the push); record `ci=pending runs=<ids>` — always `pending`, even when every listed run has finished: a `paths`-filtered workflow may register later, and resolution point 1 re-reads them all (`ci=none` / `ci=unavailable` per pre-flight). No waiting. Push the code commit on its own and confirm every workflow's run registered for that exact sha (`missing=none`) before any further push to the branch — a workflow with `concurrency: cancel-in-progress` cancels the run being waited on when a later push lands. Never put a CI-skip token in a code commit's message: a quoted `[skip ci]` skips the run all the same. The token counts only on a push's head commit: GitHub ignores one on the commits beneath. A bookkeeping-only push may carry one, which keeps it from cancelling the code commit's run under `concurrency: cancel-in-progress`. `CI status` then gives each workflow the result of its latest earlier run, provided nothing that workflow watches has changed since that run, bookkeeping aside. Bookkeeping is `_bmad-output/**`, `_bmad/custom/model-overrides.yaml` and `_bmad/custom/epic-dependencies.yaml`, plus the project's `bookkeeping:` list in `_bmad/custom/ci-gate.yaml` (a project whose `<impl>` or `<planning>` lives elsewhere lists it there); `.github/**` and `ci-gate.yaml` itself never count, and a workflow whose own `paths:` filter names a bookkeeping path still watches it. Any other skip-token push reads `unavailable`, with a reason beginning `CI never judged:`. The same check guards every carried run, so a `paths`-filtered workflow is never carried across a change it watches but never ran on. So never put a CI-skip token on a push that changes a path a `paths`-filtered workflow watches, bookkeeping or not: starting that workflow again takes two pushes.
 
 **Resolution points — each logs `ci_resolved story=<id> sha=<sha> runs=<ids> result=<success|failure|cancelled|untriggered|none> failed=<workflow paths|none> via=<shas|none>`:** (1) before the next story's implement spawn (Task Sequence per-story step 4) — the next story's plan, spec validation and spec gate proceed meanwhile, and a red reworks the previous story first while the new spec waits at `ready-for-dev` (field report 2026-10-10: waiting at the plan spawn idled the lead about 30 minutes per story); (2) at the burn-down gate; (3) at SC-4 / SC-4-P as the merge precondition (`ci_green_verified` on the branch head, or `merge_gate_blocked reason=ci_red`); (4) at resume (cross-stage integrity check 6). `CI status --branch <branch> --sha <sha>` re-reads every run, so one that registered late counts too. `pending` → wait here, with jitter, up to the project's usual run time; a required workflow still `missing`, or a run `waiting` for an approval, after that is surfaced like a red (*Unattended:* U5's queue limit).
 
@@ -2696,7 +2944,7 @@ A decision with architectural weight (Rule 20) is also written into the spine in
 `bmad-build-auto`'s epic-story path compiles `<implementation_artifacts>/epic-<N>-context.md` on first use — by spawning a subagent *before* its own clean-tree check, so the freshly written, untracked cache file would trip that check on the very first plan spawn of every epic (and again after any planning-artifact edit, which invalidates the cache). The lead therefore owns the compile:
 
 1. Render the skill once: `uv run --no-cache _bmad/scripts/render_skill.py --project-root <abs-root> --skill <abs-root>/.claude/skills/bmad-build-auto`. It prints `read and follow <snapshot-dir>/workflow.md`; take `<snapshot-dir>`.
-2. Spawn a synchronous Opus subagent (`general-purpose`, `model: opus`, `run_in_background: false` — Rule 18 (5)) whose prompt is: "Read fully and follow `<snapshot-dir>/compile-epic-context.md` for epic `<N>`. Working directory `<abs-root>` (Rule 13). Write only `<implementation_artifacts>/epic-<N>-context.md`."
+2. Spawn a synchronous Opus subagent (`general-purpose`, `model: opus`, `effort:` the `plan` row's effort — "Reasoning effort per stage" — `run_in_background: false` — Rule 18 (5)) whose prompt is: "Read fully and follow `<snapshot-dir>/compile-epic-context.md` for epic `<N>`. Working directory `<abs-root>` (Rule 13). Write only `<implementation_artifacts>/epic-<N>-context.md`."
 3. Verify the file exists, is non-empty, and starts with `# Epic <N> Context:`; otherwise halt (`context compilation verification failed` — usually a missing or unparseable `epics.md`; *Unattended:* retry once, then stop the epic — U5).
 4. Bookkeeping commit; log `epic_context_compiled`.
 
@@ -2838,7 +3086,7 @@ After the retrospective gate (whether opted in or not), the lead pauses (*Unatte
 
 > "Epic {N} is complete. Merge `{TICKET}-epic{N}` into the feature branch and delete the epic branch (local + remote) in every affected repo?"
 
-**Precondition — the branch head's CI is green.** CI judged the epic's last pushed commit, not the epic-close bookkeeping commits on top of it: those are never pushed on their own, and the merge carries them. In every affected repository, submodules first: `git fetch origin {TICKET}-epic{N}`; `H=$(git rev-parse origin/{TICKET}-epic{N})`; `git merge-base --is-ancestor $H HEAD` must hold — if it does not, or `origin/{TICKET}-epic{N}` is missing, stop and surface it: never merge, never delete the remote branch — and every file `git diff-tree -r --name-only --no-renames $H HEAD` lists must be a bookkeeping path (Rule 16: `<impl>`, `<planning>`, `_bmad/custom/model-overrides.yaml`). Anything else is pushed and its CI resolved first. Then `CI status --branch {TICKET}-epic{N} --sha $H` (or the equivalent for the project's CI): `success` on every workflow — or `untriggered` (nothing a workflow watches changed), or `ci=none` for a project without CI, which this gate confirms: if `CI expected --branch {TICKET}-epic{N} --sha $H` lists a workflow, CI has arrived since the pre-flight, so judge `CI status` at `$H` as for `ci=gh` — is required; `failure` → log `merge_gate_blocked reason=ci_red runs=<the red runs> job=<name>` and surface the failing job instead of the merge question — the branch is not mergeable while it is red, whatever the local suite says (field report 2026-08-30: a branch red for ~16 h passed two full story pipelines); `pending` → wait; `unavailable` → retry as "Reading the result" says. Confirming CI by hand (*Unattended:* as chosen at launch — U2) is only for an epic that runs without readable CI: `ci=unavailable` at the pre-flight, or `reason=no_push_trigger`. With `ci=gh`, CI that stays unreadable holds the merge like an infrastructure outage — never a merge on local green. `cancelled` → as "Reading the result" says. Log `ci_green_verified runs=<ids> head=$H` on success.
+**Precondition — the branch head's CI is green.** CI judged the epic's last pushed commit, not the epic-close bookkeeping commits on top of it: those are never pushed on their own, and the merge carries them. In every affected repository, submodules first: `git fetch origin {TICKET}-epic{N}`; `H=$(git rev-parse origin/{TICKET}-epic{N})`; `git merge-base --is-ancestor $H HEAD` must hold — if it does not, or `origin/{TICKET}-epic{N}` is missing, stop and surface it: never merge, never delete the remote branch — and every file `git diff-tree -r --name-only --no-renames $H HEAD` lists must be a bookkeeping path (Rule 16: `<impl>`, `<planning>`, `_bmad/custom/model-overrides.yaml`; the parallel kit's `_bmad/custom/epic-dependencies.yaml`). Anything else is pushed and its CI resolved first. Then `CI status --branch {TICKET}-epic{N} --sha $H` (or the equivalent for the project's CI): `success` on every workflow — or `untriggered` (nothing a workflow watches changed), or `ci=none` for a project without CI, which this gate confirms: if `CI expected --branch {TICKET}-epic{N} --sha $H` lists a workflow, CI has arrived since the pre-flight, so judge `CI status` at `$H` as for `ci=gh` — is required; `failure` → log `merge_gate_blocked reason=ci_red runs=<the red runs> job=<name>` and surface the failing job instead of the merge question — the branch is not mergeable while it is red, whatever the local suite says (field report 2026-08-30: a branch red for ~16 h passed two full story pipelines); `pending` → wait; `unavailable` → retry as "Reading the result" says. Confirming CI by hand (*Unattended:* as chosen at launch — U2) is only for an epic that runs without readable CI: `ci=unavailable` at the pre-flight, or `reason=no_push_trigger`. With `ci=gh`, CI that stays unreadable holds the merge like an infrastructure outage — never a merge on local green. `cancelled` → as "Reading the result" says. Log `ci_green_verified runs=<ids> head=$H` on success.
 
 Before asking, (1) surface the burn-down gate's result for this epic (`ledger_burndown_*` entry: what was resolved, made terminal, chartered into the burn-down story, the overflow re-owned to which next-epic keys, and the drain ratio), and (2) run the **epic-close decision sheet** (see "Ledger Drain"): every `escalated` and `decision-pending` entry, presented once with a recommended disposition, the user's answers written as `by=merge_gate` trailer lines and logged `decision_sheet_recorded` — the burn-down gate set these aside precisely because only the user can decide them. If this is the range's FINAL epic, follow the merge with the ledger sweep: `LEDGER slice all` — every remaining non-terminal entry must already be owned by a named story key outside the range; present the list with a recommended disposition for each — the end-of-project triage, sized for one sitting.
 
@@ -3161,21 +3409,22 @@ Per-stage log entries, append-only. File: `_bmad-output/implementation-artifacts
   - **Story-level:** `Story <id>` (most entries).
   - **Epic-level:** `Epic <N>` (branch lifecycle + the optional epic summary).
 
-**Valid story-level stages, in order:** `stage_spawned` (write-ahead marker IMMEDIATELY before every stage `Agent` call — see below), `story_created` (plan spawn returned `ready-for-dev`), `spec_validated` (lead gate passed; `ready-for-dev` written), `dev_complete` (implement spawn returned `done`; `review` written), `adr_verifications_complete` (mandatory, between dev and qa; emits `result=none_required` if no AD-tooled ACs), `qa_complete`, `cr_complete`, `ledger_adjudicated` (mandatory, after the last cr and before smoke — Rule 17), `smoke_complete` (mandatory, between adjudication and commit), `fresh_check` (mandatory, after smoke — Rule 19; metadata `env=<recipe|clean-checkout> tests=<n> result=<pass|fail> order=forward,reverse`), `committed`, `story_cycle` (mandatory, right after `committed` — one line the telemetry reads instead of re-deriving it: `plan_to_commit_min=<n> implement_passes=<n> reviews=<n> rework=<n> first_ci=<success|story|flake|infra|pending|none> models=plan:<m>,implement:<m>,qa:<m>,cr:<m>`; `first_ci` is back-filled by a later `ci_resolved story=<id>` entry, never by editing this line). Also story-level, whenever they occur: `stage_api_error` (a stage `Agent` call ended on a harness error — metadata `stage= error=<rate_limit|overload|usage_limit|other> wait_min=<n>`; closed by the re-spawn's normal entry) and `ci_red_classified` (metadata `run=<id> class=<story|flake|infra> test=<name|none>`). Clarification events use `<stage>_clarification_requested` (`<stage>` ∈ `plan | dev | qa | cr`), closed by that stage's normal success entry on the re-spawn — `story_created` for `plan`, `dev_complete`, `qa_complete`, `cr_complete` — never by a literal `<stage>_complete` (there is no `plan_complete`). Optional: `bookkeeping_committed sha=<short>` after each Rule 16 commit (aids resume forensics; not required). Rework-loop entries (story-level, between `cr_complete` and the next `stage_spawned`): `rework_opened` — the lead re-opened the spec; metadata `cycle_iteration=N iteration=<k> trigger=<high|med_first_review|fix_pack|smoke|ci|cap_override> items=<csv of finding / DW ids> scope_baseline=<sha>`. `rework_cap_reached` — the third iteration did not converge; metadata `cycle_iteration=N rework_iterations_used=3 cap=3 outstanding=<csv> result=stop_and_surface`. `rework_cap_override` — the user authorized one more iteration; metadata `cap=3 used=3 authorized_by=user items=<finite csv> close=next_review_without_high` — an override without `items=` is not writable: ask for the list first (Rework Loop step 5).
+**Valid story-level stages, in order:** `stage_spawned` (write-ahead marker IMMEDIATELY before every stage `Agent` call — see below), `story_created` (plan spawn returned `ready-for-dev`), `spec_validated` (lead gate passed; `ready-for-dev` written), `dev_complete` (implement spawn returned `done`; `review` written), `adr_verifications_complete` (mandatory, between dev and qa; emits `result=none_required` if no AD-tooled ACs), `qa_complete`, `cr_complete`, `ledger_adjudicated` (mandatory, after the last cr and before smoke — Rule 17), `smoke_complete` (mandatory, between adjudication and commit), `fresh_check` (mandatory, after smoke — Rule 19; metadata `env=<recipe|clean-checkout> tests=<n> result=<pass|fail> order=forward,reverse`), `committed`, `story_cycle` (mandatory, right after `committed` — one line the telemetry reads instead of re-deriving it: `plan_to_commit_min=<n> implement_passes=<n> reviews=<n> rework=<n> first_ci=<success|story|flake|infra|pending|none> models=plan:<m>@<effort>,implement:<m>@<effort>,qa:<m>@<effort>,cr:<m>@<effort>`; `first_ci` is back-filled by a later `ci_resolved story=<id>` entry, never by editing this line). Also story-level, whenever they occur: `stage_api_error` (a stage `Agent` call ended on a harness error — metadata `stage= error=<rate_limit|overload|usage_limit|other> wait_min=<n>`; closed by the re-spawn's normal entry) and `ci_red_classified` (metadata `run=<id> class=<story|flake|infra> test=<name|none>`). Clarification events use `<stage>_clarification_requested` (`<stage>` ∈ `plan | dev | qa | cr`), closed by that stage's normal success entry on the re-spawn — `story_created` for `plan`, `dev_complete`, `qa_complete`, `cr_complete` — never by a literal `<stage>_complete` (there is no `plan_complete`). Optional: `bookkeeping_committed sha=<short>` after each Rule 16 commit (aids resume forensics; not required). Rework-loop entries (story-level, between `cr_complete` and the next `stage_spawned`): `rework_opened` — the lead re-opened the spec; metadata `cycle_iteration=N iteration=<k> trigger=<high|med_first_review|fix_pack|smoke|ci|cap_override> items=<csv of finding / DW ids> scope_baseline=<sha>`. `rework_cap_reached` — the third iteration did not converge; metadata `cycle_iteration=N rework_iterations_used=3 cap=3 outstanding=<csv> result=stop_and_surface`. `rework_cap_override` — the user authorized one more iteration; metadata `cap=3 used=3 authorized_by=user items=<finite csv> close=next_review_without_high` — an override without `items=` is not writable: ask for the list first (Rework Loop step 5).
 
-**`stage_spawned` — the in-flight marker.** Written IMMEDIATELY BEFORE the `Agent` call for any pipeline stage, never after. Metadata: `stage=<plan|implement|qa|code-review> spawn_at=<UTC> model=<id> agent_name=<name passed on the Agent call> cycle_iteration=N`, plus `story_base=<HEAD sha>` on a story's first implement spawn (and, unattended, its first after a set-aside or a re-plan). Closed by that stage's success entry (`story_created` / `dev_complete` / `qa_complete` / `cr_complete`) or by a `<stage>_clarification_requested`; the success entry's `spawn_at=` repeats the marker's value. A `stage_spawned` with no closing entry is the ONLY durable evidence that a stage may still be in flight — resume MUST check for it before any re-dispatch, and (orchestrator mode) it names the runner-owned agent to ask about. The durable record is otherwise empty for exactly the window in which liveness matters; this entry fills it.
+**`stage_spawned` — the in-flight marker.** Written IMMEDIATELY BEFORE the `Agent` call for any pipeline stage, never after. Metadata: `stage=<plan|implement|qa|code-review> spawn_at=<UTC> model=<id> effort=<level|inherit|runner:<level>> agent_name=<name passed on the Agent call> cycle_iteration=N` (plus `effort_raised=implement` when code review's effort was raised), plus `story_base=<HEAD sha>` on a story's first implement spawn (and, unattended, its first after a set-aside or a re-plan). Closed by that stage's success entry (`story_created` / `dev_complete` / `qa_complete` / `cr_complete`) or by a `<stage>_clarification_requested`; the success entry's `spawn_at=` repeats the marker's value. A `stage_spawned` with no closing entry is the ONLY durable evidence that a stage may still be in flight — resume MUST check for it before any re-dispatch, and (orchestrator mode) it names the runner-owned agent to ask about. The durable record is otherwise empty for exactly the window in which liveness matters; this entry fills it.
 
 **Valid epic-level stages:**
 
 - `feature_branch_created` — SC-1 created the feature branch. Metadata: `repos=<paths>` `ticket=<id>` `description=<desc>` `root=<origin/branch>`.
 - `epic_branch_created` — SC-2 created `{TICKET}-epic{N}`. Metadata: `repos=<paths>` `from=<feature-sha>`.
+- `effort_unknown` — the `effort:` map in `_bmad/custom/model-overrides.yaml` has a key or value outside the grammar, or is neither a map nor `inherit` ("Reasoning effort per stage"); the kit's value is used. Metadata: `key=<k>` `value=<v>`. Logged once per run.
 - `ci_mode_changed` — A run that began without CI found a workflow ("CI Is a Gate"). Metadata: `from=none` `to=gh` `sha=<sha>`.
 - `epic_branch_checked_out` — Lead checked out `{TICKET}-epic{N}` (resume or after creation). Metadata: `repos=<paths>` `head=<sha>`, plus `ci=unavailable reason=no_push_trigger` when no workflow runs on a push to the epic branch ("CI Is a Gate").
 - `epic_branch_reopened` — SC-5 recreated after a prior merge. Metadata: `reason=<short>` `from=<feature-sha>`.
 - `lead_model_gate` — Pre-flight lead-tier check. Metadata: `model=<detected>` `action=proceed|user_accepted`.
 - `runtime_gate` — Pre-flight BMAD/uv/CI check. Metadata: `bmad=<version>` `uv=<version>` `ci=<gh|none|unavailable>`. (Pre-flight entries are held until Task Sequence step 4 has checked the FIRST epic of the range out to its epic branch, then written to that epic's cycle log, as `Epic <N>`, ahead of this run's other entries and committed with its first bookkeeping commit — never written before step 1's clean-tree check, which they would fail, and never on the feature branch or the trunk. A crash before then loses nothing: the pre-flight runs again on every invocation.)
 - `launch_env` — Pre-flight read of the launch environment ("Permission Mode"). Metadata: `depth=<n|default>` `watchdog=<0|1>` `bash_max_ms=<n|default>`.
-- `telemetry_gate` — Pre-flight scan for unapplied model-tier recommendations. Metadata: `pending=<N>` `action=applied|declined|none`.
+- `telemetry_gate` — Pre-flight scan for unapplied model-tier recommendations. Metadata: `pending=<N>` `action=applied|declined|none` (model-tier and effort recommendations alike).
 - `protocol_violation` — Any layer observed a containment breach (Rule 18: subagent commit/push, orphan writer, interim return, `SendMessage` to a returned agent). Metadata: `stage=<name>` `depth=<N>` `agent=<name>` `violation=<short>` `consequence=<short>` `detected_by=<short>` `outcome=<short>`. Never omitted "because it was handled" — the record is the point.
 - `root_freshness_resolved` — SC-1 root freshness check needed a user decision. Metadata: `repo=<path>` `root=<origin/branch>` `choice=push_local_first|base_on_local|base_on_origin_anyway`.
 - `epic_context_compiled` — Lead-driven epic-context pre-warm wrote `epic-{N}-context.md`. Metadata: `sha=<bookkeeping-commit>` `reason=<initial|planning_artifact_newer|x0_inserted|nfr_amendment>` `model=<id>`.
@@ -3194,7 +3443,8 @@ Per-stage log entries, append-only. File: `_bmad-output/implementation-artifacts
 - `retro_review_complete` / `retro_review_skipped` — Retro + Story X.0 gate done (start-of-epic CLOSE of the previous epic's retro artifacts, the ledger slice, and open action items). Metadata: `source_retro=<path-or-empty>` `resolved=<N>` `owned=<N>` `terminal=<N>` `dropped=<N>` `load_before=<N>` `load_after=<N>` `cap=<N>` for complete; `reason=<short>` for skipped.
 - `epic_retro_complete` / `epic_retro_skipped` — End-of-epic retrospective gate (the fully interactive, human-in-the-middle run of `/bmad-retrospective` — distinct from `retro_review_*` above). Metadata: `reason=<short>` for skipped.
 - `epic_status_done` — Lead set `epic-{N}: done` in sprint-status.yaml after the last story reached `done`. Metadata: `stories=<N>`.
-- `model_tier_checkpoint` — End-of-epic tier evaluation, EVERY epic on every project. Metadata: `armed=true|false` (policy file present) `stack_risk=<uncommon|standard|none>` `review_tier=<full-opus|mixed>` `implement_model=<id>` `high_med_avg=<per-story>` `unresolved_high_med_avg=<per-story>` `metric=<unresolved|gross>` (`gross` only when some `cr_complete` in the epic predates 2026-09-11.1 and lacks the field) `rework_stories=<N>` `review_loop_thrash=<N>` `rework_lang_defects=<N>` `review_high=<N>` `review_med=<N>` `result=hold|recommend_escalate|offer_mixed|revert_required` `applied=true|false|user_declined`.
+- `model_tier_checkpoint` — End-of-epic tier evaluation, EVERY epic on every project. Metadata: `armed=true|false` (policy file present) `stack_risk=<uncommon|standard|none>` `review_tier=<full-opus|mixed>` `implement_model=<id>` `high_med_avg=<per-story>` `unresolved_high_med_avg=<per-story>` `metric=<unresolved|gross>` (`gross` only when some `cr_complete` in the epic predates 2026-09-11.1 and lacks the field) `rework_stories=<N>` `review_loop_thrash=<N>` `rework_lang_defects=<N>` `review_high=<N>` `review_med=<N>` `implement_effort=<level|inherit>` `qa_effort=<level|inherit>` `cr_effort=<level|inherit>` `result=hold|recommend_escalate|offer_mixed|revert_required|recommend_effort_raise|offer_effort_lower|effort_revert_required` `applied=true|false|user_declined`.
+- `effort_changed` — model-overrides.yaml's `effort:` map was updated (paired with a `history:` entry in the file). Metadata: `direction=raise|lower|revert` `stages=<csv>` `from=<stage>:<level>,…` `to=<stage>:<level>,…` `reason=<short>` `evidence=<percent-encoded summary>` `approved_by=user|mandatory_rollback`. A change absent from the cycle log did not happen.
 - `model_tier_changed` — model-overrides.yaml was updated (paired with a `history:` entry in the file). Metadata: `direction=escalate|de_escalate|revert` `scope=implement_qa|review` `stages=<csv>` `from=<tier>` `to=<tier>` `reason=<short>` `evidence=<percent-encoded summary of the triggering telemetry>` `approved_by=user|mandatory_rollback`. The *why* is non-optional: an entry without `reason=` and `evidence=` is a telemetry bug.
 - `resume_local_ahead` — Resume check 2 found local ahead of remote; lead pushed. Metadata: `repo=<path>` `pushed_shas=<N>`.
 - `epic_merge_skipped` — User declined SC-4 merge. Metadata: `reason=<short>`.
@@ -3235,10 +3485,10 @@ Per-stage log entries, append-only. File: `_bmad-output/implementation-artifacts
 2026-05-18T13:56:00Z→Epic 1→sprint_planning_complete→gate=PASS model=claude-opus-4-8
 2026-05-18T13:56:30Z→Epic 1→retro_review_skipped→reason=no_retro_no_open_ledger_no_open_action_items
 2026-05-18T13:57:10Z→Epic 1→epic_context_compiled→sha=b2c3d4e reason=initial model=claude-opus-4-8
-2026-05-18T14:20:00Z→Story 1.5→stage_spawned→stage=plan spawn_at=2026-05-18T14:20:05Z model=claude-opus-4-8 agent_name=1-5-render-engine-plan-1 cycle_iteration=1
+2026-05-18T14:20:00Z→Story 1.5→stage_spawned→stage=plan spawn_at=2026-05-18T14:20:05Z model=claude-opus-4-8 effort=high agent_name=1-5-render-engine-plan-1 cycle_iteration=1
 2026-05-18T14:23:11Z→Story 1.5→story_created→spawn_at=2026-05-18T14:20:05Z model=claude-opus-4-8 path=_bmad-output/implementation-artifacts/spec-1-5-render-engine.md build_status=ready-for-dev spec_tokens=1420 epic_context=compiled
 2026-05-18T14:23:40Z→Story 1.5→spec_validated→service_introducing=true integration_ac=present adr_constrained_acs=ac5 model=claude-opus-4-8
-2026-05-18T14:23:48Z→Story 1.5→stage_spawned→stage=implement spawn_at=2026-05-18T14:23:50Z model=claude-sonnet-5 agent_name=1-5-render-engine-implement-1 cycle_iteration=1
+2026-05-18T14:23:48Z→Story 1.5→stage_spawned→stage=implement spawn_at=2026-05-18T14:23:50Z model=claude-sonnet-5 effort=high agent_name=1-5-render-engine-implement-1 cycle_iteration=1
 2026-05-18T14:24:02Z→Story 1.5→dev_complete→spawn_at=2026-05-18T14:23:50Z model=claude-sonnet-5 build_sha=9f8e7d6 baseline_revision=a1b2c3d review_loop_iteration=1 followup_review_recommended=false deferred=1 files=3 loc_added=412 cycle_iteration=1
 2026-05-18T14:25:00Z→Story 1.5→adr_verifications_complete→tool=chrome_devtools_mcp acs=ac5 result=pass evidence=path/to/evidence/ model=claude-opus-4-8
 2026-05-18T14:29:47Z→Story 1.5→qa_complete→spawn_at=2026-05-18T14:25:30Z model=claude-sonnet-5 tests=tests/render-engine.test.ts tests_added=14 closing_sections_present=true
@@ -3327,6 +3577,7 @@ Derivable from per-stage entries; a convenience, not a source of truth.
 - **Forgetting submodules need their own `{TICKET}-epic{N}`** — SC-2 applies per repo. Each submodule has its own.
 - **Running parallel epics in a single working directory** — Git allows one HEAD per working tree. Parallel agents use `git worktree add` or separate clones (SC-8).
 - **Auto-resolving merge conflicts at SC-4** — Three-way-merge conflicts at end-of-epic must be surfaced to the user. Git's auto-resolution can silently drop intentional changes. (Attended runs. `--unattended` resolves only what its policy allows, as rulings the owner can veto — U9.)
+- **Spawning a stage without its effort under a parent that has one** — an explicit effort carries down to every agent beneath it that sets none, and it overrides the settings' per-model levels: a runner at `high` would run code review at `high`. Pass every stage's resolved effort ("Reasoning effort per stage").
 - **Spawning pipeline sub-agents without passing the resolved model** — Omitting the `model` parameter on the `Agent` call makes every stage inherit the lead's model instead of the pipeline's intent (dev/qa → `sonnet`, code-review → `opus` per the Model Strategy map, unless `_bmad/custom/model-overrides.yaml` or a skill's frontmatter re-pins it). Resolve per Agent Invocation Pattern step 1 and pass it on the spawn. Lead-run gate skills are the exception — they run inline on the lead's model by design.
 - **Letting a skill's interactive checkpoint block the run** — `bmad-code-review` has four happy-path halts (context confirm, decision-needed resolution, patch menu, next-steps menu) plus a large-diff chunking offer; `bmad-qa-generate-e2e-tests` opens by asking what to test. Pre-answer every checkpoint in the spawn prompt (Rule 9); an un-pre-answered checkpoint is a Clarification, never a silent wait. (`bmad-build-auto` has none — its only exits are HALT statuses.)
 - **Expecting `bmad-build-auto` to sync sprint-status.yaml** — It never does (only the interactive `bmad-build` syncs). The lead writes `ready-for-dev` / `in-progress` / `review` through `SPRINT_PLAN generate --set`; `bmad-code-review` writes `done`/`in-progress`; the lead writes `epic-{N}: done`. Any other status write path (hand edits, prose instructions to the stage agent) desyncs tracking (see Status Ownership).
@@ -3630,13 +3881,23 @@ After writing all files, run these checks:
 2d. **The CI gate is installed and sound:**
    ```bash
    ls _bmad/scripts/ci-gate.py
-   uv run --no-cache _bmad/scripts/ci-gate.py selftest                   # selftest ok: 78/78 cases (filter patterns, triggers, paths, remotes, verdicts)
+   uv run --no-cache _bmad/scripts/ci-gate.py selftest                   # selftest ok: 89/89 cases (filter patterns, triggers, paths, remotes, verdicts, bookkeeping, skip tokens)
    grep -c "ci-gate.py" .claude/commands/epic-cycle.md                    # >= 1 (the CI shorthand)
    grep -c "CI status" .claude/commands/epic-cycle.md                     # >= 8 (every CI read: commit, resolution, merge gate, resume)
    grep -cE 'gh run view|(-L|--limit) ?1([^0-9]|$)' .claude/commands/epic-cycle.md          # 0 (no CI read takes a single run)
    grep -cE 'gh run view|(-L|--limit) ?1([^0-9]|$)' _bmad/custom/epic-cycle-unattended.md   # 0 (nor does the doctrine)
    ```
-   Expected exactly as commented. With `ci=gh`, also run `uv run --no-cache _bmad/scripts/ci-gate.py expected --branch <an epic branch name>`: it lists the workflows a push to an epic branch starts. Show the list to the user. If it names none, CI never runs on epic branches, and each epic will run as `ci=unavailable reason=no_push_trigger`.
+   Expected exactly as commented.
+
+   With `ci=gh`, also run `uv run --no-cache _bmad/scripts/ci-gate.py expected --branch <an epic branch name>`: it lists the workflows a push to an epic branch starts. Show the list to the user. If `<impl>` or `<planning>` resolve outside `_bmad-output/`, add them to `bookkeeping:` in `_bmad/custom/ci-gate.yaml` (create it if absent): a bookkeeping push that skips CI is judged by them. If it names none, CI never runs on epic branches, and each epic will run as `ci=unavailable reason=no_push_trigger`.
+
+2e. **Per-stage reasoning effort is wired:**
+   ```bash
+   grep -c "Reasoning effort per stage" .claude/commands/epic-cycle.md       # >= 3 (the map, the spawn step, the anti-pattern)
+   grep -c "effort=<resolved|inherit>" .claude/commands/epic-cycle.md        # 1 (stage_spawned records it)
+   grep -c "effort_changed" .claude/commands/epic-cycle.md                   # >= 2 (the checkpoint, the stage enum)
+   ```
+   Expected exactly as commented. If `_bmad/custom/model-overrides.yaml` has an `effort:` map, show it to the user: each key must be one of `plan`, `implement`, `qa`, `code-review`, `runner`, and each value one of `low`, `medium`, `high`, `xhigh`, `max`, `inherit` (or the whole map the single word `inherit`).
 
 3. **No `.toml` carries an `on_complete` hook:**
    ```bash
@@ -3715,6 +3976,7 @@ The workflow is ready to use. Projects can add custom rules to `_bmad/custom/ski
 
 - **Sequential run — safe at a story boundary.** Upgrade after a story's `committed` entry and before the next `stage_spawned` (or at any stage boundary with a clean tree and no spawn in flight — never while a `bmad-build-auto` / QA / code-review agent is running). The install commit lands on the epic branch (a chore commit under SC-3; it reaches the feature branch at the SC-4 merge). On the next `/epic-cycle` invocation resume does the rest: committed stories are skipped; sprint planning re-runs, so `ledger_load` runs; a story at `cr_complete` without `ledger_adjudicated` resumes at adjudication; an epic whose last story is committed but has no `ledger_burndown_*` entry runs the burn-down gate before `epic_status_done`.
 - **Ledger migration is not optional mid-epic.** `ledger_load` halts on a legacy-grammar ledger, so the Step 1 migration must be part of the upgrade commit. Migrated entries are triaged by class at migration (human-owned and product calls → `decision-pending`, story-closable → `routed owner=burndown`, non-two-way-door LOWs → `wontfix-accepted`); this epic's burn-down gate is therefore the first real drain of the story-closable backlog and may charter a burn-down story (bounded by `burndown_story_max`), and this epic's SC-4 decision sheet is the first time the `decision-pending` entries reach the user — budget for both.
+- **Upgrading to ≥ 2026-10-25.1 (per-stage reasoning effort; CI-skip bookkeeping pushes).** Same timing as 2026-10-19.2 below. **Behaviour change:** every stage spawn now passes a reasoning effort — plan, implement and QA `high`, code review `xhigh`, a parallel runner `high` — so stages no longer run at Claude Code's per-model settings. A user who runs Opus at `xhigh`, for example, sees planning at `high`; under the parallel kit the runner itself, and what it runs inline (the epic-context pre-warm, inline build-auto), runs at `high` too. Where your settings run a model below these levels those stages now cost more; above them, less. To keep the old behaviour everywhere, the runner included, set `effort: inherit` in `_bmad/custom/model-overrides.yaml`; to change one stage, set its row. Re-installing replaces `ci-gate.py`. A push whose head commit message carries a CI-skip token, and whose changes since each workflow's last run are bookkeeping, now keeps those runs' results instead of reading `unavailable`. A project with bookkeeping outside `_bmad-output/**`, `model-overrides.yaml` and `epic-dependencies.yaml` lists it under `bookkeeping:` in `_bmad/custom/ci-gate.yaml`. A carried run may now come from another branch's run on the same commit (a fast-forwarded head), where a red wins. A workflow that never ran on a change it watches reads `unavailable` with a reason beginning `CI never judged:`: no outage, and no retry fixes it. Push what the reason says, once ("Reading the result"). The 300-second wait no longer covers force pushes and large pushes: each workflow is judged by what it watches, and GitHub's `paths` limit is 3,000 changed files. Nothing to migrate.
 - **Upgrading to ≥ 2026-10-19.3 (the CI gate's final review).** Same timing as 2026-10-19.2 below; re-installing replaces `ci-gate.py`. It now carries each `paths`-filtered workflow's own latest run, never a whole earlier verdict. For 300 seconds after a push, and whenever GitHub's decision cannot be known, it waits instead of carrying. It reads every kind of GitHub push activity, a branch's first push and force pushes included. A run that began without CI (`ci=none`) re-checks at each epic's start and after a push that changes `.github/workflows/` (`ci_mode_changed`). The merge gate's pushed-head check runs in every affected repository. Nothing to migrate.
 - **Upgrading to ≥ 2026-10-19.2 (CI with several workflows; field report 2026-10-19).** Sequential runs: safe at a story boundary, attended or during an unattended hold — never under a live run. An orchestrator run follows the parallel kit's rule: never while one is in flight, held epics included. The CI gate used to read one run per commit (`gh run list … -L 1`), so a project with two workflows per push could pass the gate while the other was still running or red. It now reads every workflow a push starts, through `_bmad/scripts/ci-gate.py` (File 10; it needs `uv` and `gh`, as before). Log entries change shape: `committed … runs=<ids>`, `ci_resolved … sha= runs=`, `ci_green_verified runs=`, `merge_gate_blocked … runs=`. An entry written before the upgrade carries `run=<id>`; resolve an open `ci=pending` by its commit with `CI status`, since its single run may be one of several. Re-read the last resolved commit with `CI status` too: a red there predates the next story, so it is inherited, not the next story's. Nothing to migrate. With `ci=gh`, check that `ci-gate.py expected --branch <an epic branch>` lists the workflows you expect. A workflow it marks `required` that never runs on that branch would hold the gate at `pending`: list it under `optional:` in `_bmad/custom/ci-gate.yaml` (project-owned), and report the trigger the script misread.
 - **Upgrading to ≥ 2026-10-19.1 (`--unattended` and `--review`).** Attended runs are unchanged: the doctrine (`_bmad/custom/epic-cycle-unattended.md`) is read only under the new flags. The install writes `_bmad/custom/unattended.yaml` from its template when absent — **review it with the user before the first unattended run**: `owner_only` (what always waits for them), `veto_window` (what the loop decides and reports), `hard_stops`, `milestones` (which define "the release"), `product_defaults`, `owner_fixed` and `stage_preamble` are the project's to set. `.gitignore` gains `_bmad-output/unattended/`. Never upgrade under a live unattended run (Step 1 check 7): hold it first (`bash _bmad/scripts/unattended-inbox.sh <state> hold "upgrade"`, where `<state>` is `_bmad-output/unattended` or, for a parallel run, `<worktree_base>/.coordination/unattended`), wait until the run logs `hold_complete` and `run-status` prints `none`, upgrade, then re-invoke the same command to resume — the resume clears the hold.
